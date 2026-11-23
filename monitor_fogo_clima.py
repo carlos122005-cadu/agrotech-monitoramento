@@ -1,16 +1,20 @@
 import os
 import requests
 import pandas as pd
+from io import StringIO
 from datetime import datetime, timezone
 
 # =====================================================================
-# CONFIGURAÇÕES (.strip() limpa espaços ou quebras de linha acidentais)
+# CONFIGURAÇÕES
 # =====================================================================
 LATITUDE = float((os.getenv("FAZENDA_LAT") or "-22.0286").strip().replace(",", "."))
 LONGITUDE = float((os.getenv("FAZENDA_LON") or "-42.3611").strip().replace(",", "."))
 RAIO_KM = float((os.getenv("RAIO_ALERTA_KM") or "15.0").strip().replace(",", "."))
 
-NASA_FIRMS_KEY = (os.getenv("NASA_FIRMS_KEY") or "").strip().lstrip(":")
+# Extrai apenas a chave de 32 caracteres caso tenha sido colada uma URL
+_raw_nasa = (os.getenv("NASA_FIRMS_KEY") or "").strip()
+NASA_FIRMS_KEY = [p for p in _raw_nasa.split("/") if len(p) == 32][-1] if "/" in _raw_nasa else _raw_nasa.lstrip(":")
+
 WHATSAPP_PHONE = (os.getenv("WHATSAPP_PHONE") or "").strip()
 WHATSAPP_APIKEY = (os.getenv("WHATSAPP_APIKEY") or "").strip()
 
@@ -41,15 +45,15 @@ def enviar_alerta_whatsapp(mensagem: str):
 def verificar_clima():
     """Consulta previsão/condições atuais na Open-Meteo."""
     url = (
-        f"https://open-meteo.com?"
-        f"latitude={LATITUDE}&longitude={LONGITUDE}"
+        f"https://open-meteo.com"
+        f"?latitude={LATITUDE}&longitude={LONGITUDE}"
         f"&current=temperature_2m,relative_humidity_2m,wind_speed_10m,precipitation"
-        f"&timezone=America%2FSao_Paulo"
+        f"&timezone=America/Sao_Paulo"
     )
     try:
-        resp = requests.get(url, timeout=15)
-        if resp.status_code != 200:
-            print(f"Erro HTTP Open-Meteo: {resp.status_code} - {resp.text}")
+        resp = requests.get(url, headers={"User-Agent": "VectorXAgro/1.0"}, timeout=20)
+        if resp.status_code != 200 or not resp.text.strip():
+            print(f"⚠️ Resposta inválida Open-Meteo (Status {resp.status_code}): {resp.text[:150]}")
             return [], "Dados climáticos indisponíveis no momento."
 
         dados = resp.json()
@@ -89,12 +93,11 @@ def verificar_focos_calor():
     url = f"https://nasa.gov{NASA_FIRMS_KEY}/VIIRS_SNPP_NRT/{area}/1"
 
     try:
-        resp = requests.get(url, timeout=20)
+        resp = requests.get(url, headers={"User-Agent": "VectorXAgro/1.0"}, timeout=25)
         if resp.status_code != 200:
-            print(f"Erro HTTP NASA FIRMS: {resp.status_code} - {resp.text[:120]}")
+            print(f"⚠️ Erro HTTP NASA FIRMS (Status {resp.status_code}): {resp.text[:150]}")
             return []
 
-        from io import StringIO
         df = pd.read_csv(StringIO(resp.text))
         if df.empty:
             print("🛰️ Satélite NASA FIRMS consultado com sucesso: 0 focos na área.")
@@ -117,7 +120,7 @@ def verificar_focos_calor():
 
 def executar_sentinela():
     agora = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
-    print(f"🛰️ Iniciando varredura VectorX Agro ({agora}) | Lat: {LATITUDE}, Lon: {LONGITUDE}...")
+    print(f"🛰️ Iniciando varredura VectorX Agro ({agora})...")
 
     alertas_clima, resumo_clima = verificar_clima()
     focos = verificar_focos_calor()
