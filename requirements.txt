@@ -1,0 +1,7 @@
+supabase
+geopandas
+shapely
+pandas
+requests
+matplotlib
+contextily
