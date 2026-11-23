@@ -4,17 +4,15 @@ import pandas as pd
 from datetime import datetime, timezone
 
 # =====================================================================
-# CONFIGURAÇÕES (Lidas das GitHub Secrets / Variáveis de Ambiente)
+# CONFIGURAÇÕES (.strip() limpa espaços ou quebras de linha acidentais)
 # =====================================================================
-# Coordenadas da propriedade (usa o padrão se a Secret estiver vazia)
-LATITUDE = float(os.getenv("FAZENDA_LAT") or "-15.7801")
-LONGITUDE = float(os.getenv("FAZENDA_LON") or "-47.9292")
-RAIO_KM = float(os.getenv("RAIO_ALERTA_KM") or "15.0")
+LATITUDE = float((os.getenv("FAZENDA_LAT") or "-22.0286").strip().replace(",", "."))
+LONGITUDE = float((os.getenv("FAZENDA_LON") or "-42.3611").strip().replace(",", "."))
+RAIO_KM = float((os.getenv("RAIO_ALERTA_KM") or "15.0").strip().replace(",", "."))
 
-# Chaves de API
-NASA_FIRMS_KEY = os.getenv("NASA_FIRMS_KEY") or ""
-WHATSAPP_PHONE = os.getenv("WHATSAPP_PHONE") or ""
-WHATSAPP_APIKEY = os.getenv("WHATSAPP_APIKEY") or ""
+NASA_FIRMS_KEY = (os.getenv("NASA_FIRMS_KEY") or "").strip().lstrip(":")
+WHATSAPP_PHONE = (os.getenv("WHATSAPP_PHONE") or "").strip()
+WHATSAPP_APIKEY = (os.getenv("WHATSAPP_APIKEY") or "").strip()
 
 
 def enviar_alerta_whatsapp(mensagem: str):
@@ -41,7 +39,7 @@ def enviar_alerta_whatsapp(mensagem: str):
 
 
 def verificar_clima():
-    """Consulta previsão/condições atuais na Open-Meteo (não exige API Key)."""
+    """Consulta previsão/condições atuais na Open-Meteo."""
     url = (
         f"https://open-meteo.com?"
         f"latitude={LATITUDE}&longitude={LONGITUDE}"
@@ -49,8 +47,13 @@ def verificar_clima():
         f"&timezone=America%2FSao_Paulo"
     )
     try:
-        resp = requests.get(url, timeout=15).json()
-        atual = resp.get("current", {})
+        resp = requests.get(url, timeout=15)
+        if resp.status_code != 200:
+            print(f"Erro HTTP Open-Meteo: {resp.status_code} - {resp.text}")
+            return [], "Dados climáticos indisponíveis no momento."
+
+        dados = resp.json()
+        atual = dados.get("current", {})
         temp = atual.get("temperature_2m", 0)
         umid = atual.get("relative_humidity_2m", 0)
         vento = atual.get("wind_speed_10m", 0)
@@ -86,8 +89,15 @@ def verificar_focos_calor():
     url = f"https://nasa.gov{NASA_FIRMS_KEY}/VIIRS_SNPP_NRT/{area}/1"
 
     try:
-        df = pd.read_csv(url)
+        resp = requests.get(url, timeout=20)
+        if resp.status_code != 200:
+            print(f"Erro HTTP NASA FIRMS: {resp.status_code} - {resp.text[:120]}")
+            return []
+
+        from io import StringIO
+        df = pd.read_csv(StringIO(resp.text))
         if df.empty:
+            print("🛰️ Satélite NASA FIRMS consultado com sucesso: 0 focos na área.")
             return []
 
         focos = []
@@ -107,7 +117,7 @@ def verificar_focos_calor():
 
 def executar_sentinela():
     agora = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
-    print(f"🛰️ Iniciando varredura VectorX Agro ({agora})...")
+    print(f"🛰️ Iniciando varredura VectorX Agro ({agora}) | Lat: {LATITUDE}, Lon: {LONGITUDE}...")
 
     alertas_clima, resumo_clima = verificar_clima()
     focos = verificar_focos_calor()
@@ -138,4 +148,3 @@ def executar_sentinela():
 
 if __name__ == "__main__":
     executar_sentinela()
-                                                        
