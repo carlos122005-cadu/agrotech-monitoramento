@@ -1,0 +1,35 @@
+name: Sentinela VectorX Agro 24/7
+
+on:
+  schedule:
+    - cron: '0 * * * *'
+  workflow_dispatch:
+
+jobs:
+  monitorar:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Baixar código do repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependências
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Executar Monitoramento de Fogo e Clima
+        env:
+          FAZENDA_LAT: ${{ secrets.FAZENDA_LAT }}
+          FAZENDA_LON: ${{ secrets.FAZENDA_LON }}
+          RAIO_ALERTA_KM: ${{ secrets.RAIO_ALERTA_KM }}
+          NASA_FIRMS_KEY: ${{ secrets.NASA_FIRMS_KEY }}
+          WHATSAPP_PHONE: ${{ secrets.WHATSAPP_PHONE }}
+          WHATSAPP_APIKEY: ${{ secrets.WHATSAPP_APIKEY }}
+        run: python monitor_fogo_clima.py
+        
