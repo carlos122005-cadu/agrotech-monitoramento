@@ -4,7 +4,7 @@ import pandas as pd
 from io import StringIO
 from datetime import datetime, timezone
 
-S = chr(47)  # Representa a barra '/' sem risco do teclado do celular apagar
+S = chr(47)
 
 # =====================================================================
 # CONFIGURAÇÕES
@@ -25,7 +25,7 @@ def enviar_alerta_whatsapp(mensagem: str):
         print(mensagem)
         return
 
-    url = f"https:{S}{S}://callmebot.com{S}whatsapp.php"
+    url = f"https:{S}://callmebot.com{S}whatsapp.php"
     params = {
         "phone": WHATSAPP_PHONE,
         "text": mensagem,
@@ -43,7 +43,7 @@ def enviar_alerta_whatsapp(mensagem: str):
 
 def verificar_clima():
     """Consulta previsão/condições atuais na Open-Meteo."""
-    url = f"https:{S}{S}://open-meteo.com{S}v1{S}forecast"
+    url = f"https:{S}://open-meteo.com{S}v1{S}forecast"
     params = {
         "latitude": LATITUDE,
         "longitude": LONGITUDE,
@@ -137,7 +137,7 @@ def executar_sentinela():
     if focos:
         mensagens.append(f"🔥 *ALERTA DE QUEIMADA DETECTADO!* ({len(focos)} foco(s) no raio de {RAIO_KM} km)")
         for i, f in enumerate(focos[:5], 1):
-            link_maps = f"https:{S}{S}://google.com{S}?q={f['lat']},{f['lon']}"
+            link_maps = f"https:{S}://google.com{S}?q={f['lat']},{f['lon']}"
             mensagens.append(f"• Foco {i} (Confiança: {f['confianca']}): {link_maps}")
 
     if alertas_clima:
