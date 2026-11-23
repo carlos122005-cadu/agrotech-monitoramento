@@ -6,15 +6,15 @@ from datetime import datetime, timezone
 # =====================================================================
 # CONFIGURAÇÕES (Lidas das GitHub Secrets / Variáveis de Ambiente)
 # =====================================================================
-# Coordenadas da propriedade (Exemplo: Centro-Oeste - ajuste para sua fazenda)
-LATITUDE = float(os.getenv("FAZENDA_LAT", "-15.7801"))
-LONGITUDE = float(os.getenv("FAZENDA_LON", "-47.9292"))
-RAIO_KM = float(os.getenv("RAIO_ALERTA_KM", "15.0"))  # Raio de alerta de queimadas
+# Coordenadas da propriedade (usa o padrão se a Secret estiver vazia)
+LATITUDE = float(os.getenv("FAZENDA_LAT") or "-15.7801")
+LONGITUDE = float(os.getenv("FAZENDA_LON") or "-47.9292")
+RAIO_KM = float(os.getenv("RAIO_ALERTA_KM") or "15.0")
 
 # Chaves de API
-NASA_FIRMS_KEY = os.getenv("NASA_FIRMS_KEY", "")  # Chave gratuita da NASA FIRMS
-WHATSAPP_PHONE = os.getenv("WHATSAPP_PHONE", "")  # Ex: 5562999999999
-WHATSAPP_APIKEY = os.getenv("WHATSAPP_APIKEY", "")  # Chave da API de WhatsApp (ex: CallMeBot)
+NASA_FIRMS_KEY = os.getenv("NASA_FIRMS_KEY") or ""
+WHATSAPP_PHONE = os.getenv("WHATSAPP_PHONE") or ""
+WHATSAPP_APIKEY = os.getenv("WHATSAPP_APIKEY") or ""
 
 
 def enviar_alerta_whatsapp(mensagem: str):
@@ -57,7 +57,6 @@ def verificar_clima():
         chuva = atual.get("precipitation", 0)
 
         alertas_clima = []
-        # Regra dos 30-30-30 (Risco crítico de propagação de incêndio)
         if temp > 30 and umid < 30 and vento > 30:
             alertas_clima.append("🚨 *RISCO EXTREMO DE INCÊNDIO (Regra 30-30-30 atingida!)*")
         elif umid < 25:
@@ -82,18 +81,15 @@ def verificar_focos_calor():
         print("⚠️ NASA_FIRMS_KEY não configurada. Pulando checagem de satélite.")
         return []
 
-    # Calcula bounding box aproximado (~1 grau ≈ 111 km)
     delta = RAIO_KM / 111.0
     area = f"{LONGITUDE - delta:.4f},{LATITUDE - delta:.4f},{LONGITUDE + delta:.4f},{LATITUDE + delta:.4f}"
-    
-    # Fonte: VIIRS_SNPP_NRT (Alta resolução - 375m) - últimos 1 dia
     url = f"https://nasa.gov{NASA_FIRMS_KEY}/VIIRS_SNPP_NRT/{area}/1"
-    
+
     try:
         df = pd.read_csv(url)
         if df.empty:
             return []
-        
+
         focos = []
         for _, row in df.iterrows():
             focos.append({
@@ -120,14 +116,13 @@ def executar_sentinela():
 
     if focos:
         mensagens.append(f"🔥 *ALERTA DE QUEIMADA DETECTADO!* ({len(focos)} foco(s) no raio de {RAIO_KM} km)")
-        for i, f in enumerate(focos[:5], 1):  # Limita aos 5 primeiros para não poluir
+        for i, f in enumerate(focos[:5], 1):
             link_maps = f"https://google.com{f['lat']},{f['lon']}"
             mensagens.append(f"• Foco {i} (Confiança: {f['confianca']}): {link_maps}")
 
     if alertas_clima:
         mensagens.extend(alertas_clima)
 
-    # Só dispara WhatsApp se houver alerta de fogo ou alerta climático crítico
     if mensagens:
         texto_final = (
             f"🚜 *VECTORX AGRO - SENTINELA 24/7*\n"
@@ -143,4 +138,4 @@ def executar_sentinela():
 
 if __name__ == "__main__":
     executar_sentinela()
-                                 
+                                                        
