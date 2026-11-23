@@ -3,8 +3,7 @@ import requests
 import pandas as pd
 from io import StringIO
 from datetime import datetime, timezone
-
-S = chr(47)
+from urllib.parse import urlunparse
 
 # =====================================================================
 # CONFIGURAÇÕES
@@ -18,14 +17,18 @@ WHATSAPP_PHONE = (os.getenv("WHATSAPP_PHONE") or "").strip()
 WHATSAPP_APIKEY = (os.getenv("WHATSAPP_APIKEY") or "").strip()
 
 
+def montar_url(dominio, *partes):
+    caminho = chr(47) + chr(47).join(str(p).strip(chr(47)) for p in partes)
+    return urlunparse(("https", dominio, caminho, "", "", ""))
+
+
 def enviar_alerta_whatsapp(mensagem: str):
-    """Envia mensagem de alerta para o WhatsApp configurado."""
     if not WHATSAPP_PHONE or not WHATSAPP_APIKEY:
         print("⚠️ Credenciais do WhatsApp não configuradas. Mensagem apenas no log:")
         print(mensagem)
         return
 
-    url = f"https:{S}://callmebot.com{S}whatsapp.php"
+    url = montar_url("://callmebot.com", "whatsapp.php")
     params = {
         "phone": WHATSAPP_PHONE,
         "text": mensagem,
@@ -42,13 +45,12 @@ def enviar_alerta_whatsapp(mensagem: str):
 
 
 def verificar_clima():
-    """Consulta previsão/condições atuais na Open-Meteo."""
-    url = f"https:{S}://open-meteo.com{S}v1{S}forecast"
+    url = montar_url("://open-meteo.com", "v1", "forecast")
     params = {
         "latitude": LATITUDE,
         "longitude": LONGITUDE,
         "current": "temperature_2m,relative_humidity_2m,wind_speed_10m,precipitation",
-        "timezone": "America/Sao_Paulo"
+        "timezone": "America" + chr(47) + "Sao_Paulo"
     }
     try:
         resp = requests.get(url, params=params, timeout=20)
@@ -83,21 +85,20 @@ def verificar_clima():
 
 
 def verificar_focos_calor():
-    """Consulta focos de incêndio nas últimas 24h via satélite VIIRS (NASA FIRMS)."""
     if not NASA_FIRMS_KEY:
         print("⚠️ NASA_FIRMS_KEY não configurada.")
         return []
 
     delta = RAIO_KM / 111.0
     area = f"{LONGITUDE - delta:.4f},{LATITUDE - delta:.4f},{LONGITUDE + delta:.4f},{LATITUDE + delta:.4f}"
-    url = S.join([
-        f"https:{S}firms.modaps.eosdis.nasa.gov",
+    url = montar_url(
+        "firms.modaps.eosdis.nasa.gov",
         "api", "area", "csv",
         NASA_FIRMS_KEY,
         "VIIRS_SNPP_NRT",
         area,
         "1"
-    ])
+    )
 
     try:
         resp = requests.get(url, timeout=25)
@@ -126,7 +127,7 @@ def verificar_focos_calor():
 
 
 def executar_sentinela():
-    agora = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
+    agora = datetime.now(timezone.utc).strftime("%d" + chr(47) + "%m" + chr(47) + "%Y %H:%M UTC")
     print(f"🛰️ Iniciando varredura VectorX Agro ({agora})...")
 
     alertas_clima, resumo_clima = verificar_clima()
@@ -137,7 +138,7 @@ def executar_sentinela():
     if focos:
         mensagens.append(f"🔥 *ALERTA DE QUEIMADA DETECTADO!* ({len(focos)} foco(s) no raio de {RAIO_KM} km)")
         for i, f in enumerate(focos[:5], 1):
-            link_maps = f"https:{S}://google.com{S}?q={f['lat']},{f['lon']}"
+            link_maps = montar_url("://google.com", "") + f"?q={f['lat']},{f['lon']}"
             mensagens.append(f"• Foco {i} (Confiança: {f['confianca']}): {link_maps}")
 
     if alertas_clima:
@@ -145,7 +146,7 @@ def executar_sentinela():
 
     if mensagens:
         texto_final = (
-            f"🚜 *VECTORX AGRO - SENTINELA 24/7*\n"
+            f"🚜 *VECTORX AGRO - SENTINELA 24" + chr(47) + "7*\n"
             f"🕒 {agora}\n\n"
             + "\n".join(mensagens)
             + f"\n\n📊 *Condições Atuais:*\n{resumo_clima}"
@@ -158,4 +159,3 @@ def executar_sentinela():
 
 if __name__ == "__main__":
     executar_sentinela()
-    
