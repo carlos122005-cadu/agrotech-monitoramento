@@ -18,8 +18,9 @@ WHATSAPP_APIKEY = (os.getenv("WHATSAPP_APIKEY") or "").strip()
 
 
 def montar_url(dominio, *partes):
+    dominio_limpo = dominio.strip(".")
     caminho = chr(47) + chr(47).join(str(p).strip(chr(47)) for p in partes)
-    return urlunparse(("https", dominio, caminho, "", "", ""))
+    return urlunparse(("https", dominio_limpo, caminho, "", "", ""))
 
 
 def enviar_alerta_whatsapp(mensagem: str):
@@ -28,7 +29,7 @@ def enviar_alerta_whatsapp(mensagem: str):
         print(mensagem)
         return
 
-    url = montar_url("://callmebot.com", "whatsapp.php")
+    url = montar_url("api." + "callmebot.com", "whatsapp.php")
     params = {
         "phone": WHATSAPP_PHONE,
         "text": mensagem,
@@ -45,7 +46,7 @@ def enviar_alerta_whatsapp(mensagem: str):
 
 
 def verificar_clima():
-    url = montar_url("://open-meteo.com", "v1", "forecast")
+    url = montar_url("api." + "open-meteo.com", "v1", "forecast")
     params = {
         "latitude": LATITUDE,
         "longitude": LONGITUDE,
@@ -159,3 +160,4 @@ def executar_sentinela():
 
 if __name__ == "__main__":
     executar_sentinela()
+                
