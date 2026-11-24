@@ -54,41 +54,43 @@ if senha != SENHA_ADMIN:
 
 with st.form("cadastro_fazenda"):
     st.subheader("📍 Nova Fazenda Monitorada")
-    nome_fazenda = st.text_input("Nome da Propriedade", placeholder="Ex: Sítio Boa Esperança - Cordeiro/RJ")
+    fazenda_nome = st.text_input("Nome da Propriedade", placeholder="Ex: Sítio Boa Esperança - Cordeiro/RJ")
     whatsapp = st.text_input("WhatsApp do Produtor (com DDI 55 + DDD)", placeholder="Ex: 5522999999999")
     apikey_wpp = st.text_input("API Key CallMeBot", placeholder="Ex: 1234567")
+    cultura = st.text_input("Cultura / Atividade Principal", value="Pastagem e Silagem")
     raio_km = st.number_input("Raio de Alerta de Queimadas (km)", min_value=2.0, max_value=50.0, value=15.0, step=1.0)
     arq_geo = st.file_uploader("Arquivo do Perímetro (.KML ou .GeoJSON / CAR)", type=["kml", "geojson", "json"])
+    usar_exemplo = st.checkbox("🧪 Usar polígono de exemplo em Cordeiro/RJ (teste rápido sem arquivo)")
     enviado = st.form_submit_button("✅ Cadastrar Fazenda no Sistema")
 
 if enviado:
-    if not nome_fazenda or not whatsapp or not arq_geo:
-        st.error("Preencha o nome da fazenda, o WhatsApp e envie o arquivo .KML ou .GeoJSON.")
-    elif not SB_URL or not SB_KEY:
-        st.error("Configure SUPABASE_URL e SUPABASE_KEY nos Secrets do Streamlit.")
+    if not fazenda_nome or not whatsapp or (not arq_geo and not usar_exemplo):
+        st.error("Preencha o nome, o WhatsApp e envie um arquivo (ou marque o polígono de exemplo).")
     else:
         try:
-            poly = extrair_poligono(arq_geo)
+            if usar_exemplo and not arq_geo:
+                poly = Polygon([(-42.365, -22.025), (-42.355, -22.025), (-42.355, -22.032), (-42.365, -22.032), (-42.365, -22.025)])
+            else:
+                poly = extrair_poligono(arq_geo)
             if not poly or not poly.is_valid:
-                st.error("Não foi possível ler um polígono válido nesse arquivo.")
+                st.error("Não foi possível ler um polígono válido.")
             else:
                 centro = poly.centroid
                 headers = {"apikey": SB_KEY, "Authorization": f"Bearer {SB_KEY}", "Content-Type": "application/json", "Prefer": "return=representation"}
                 payload = {
-                    "nome_fazenda": nome_fazenda.strip(),
+                    "fazenda_nome": fazenda_nome.strip(),
                     "whatsapp": whatsapp.strip(),
                     "apikey_whatsapp": apikey_wpp.strip(),
+                    "cultura": cultura.strip(),
                     "raio_km": float(raio_km),
-                    "lat": round(centro.y, 6),
-                    "lon": round(centro.x, 6),
-                    "geom": f"SRID=4326;{poly.wkt}",
+                    "geometria": f"SRID=4326;{poly.wkt}",
                     "ativo": True
                 }
                 r = requests.post(f"{SB_URL}/rest/v1/fazendas", headers=headers, json=payload, timeout=15)
                 if r.status_code in (200, 201):
-                    st.success(f"🎉 **{nome_fazenda}** cadastrada com sucesso! Centroide: ({centro.y:.4f}, {centro.x:.4f})")
+                    st.success(f"🎉 **{fazenda_nome}** cadastrada com sucesso! Centroide: ({centro.y:.4f}, {centro.x:.4f})")
                 else:
                     st.error(f"Erro ao salvar no Supabase ({r.status_code}): {r.text}")
         except Exception as e:
-            st.error(f"Falha ao processar arquivo: {e}")
+            st.error(f"Falha ao processar: {e}")
 # FIM_APP
