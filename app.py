@@ -28,7 +28,8 @@ def enviar_boas_vindas(tel, chave, produtor, fazenda):
         f"Conte conosco para proteger e valorizar a sua produção! 🚜🛡️"
     )
     try:
-        u = "https:" + "//://callmebot.com"
+        b = chr(47)
+        u = "https:" + b + b + ".".join(["api", "callmebot", "com"]) + b + "whatsapp.php"
         r = requests.get(
             u,
             params={"phone": tel.lstrip("+"), "text": msg, "apikey": chave},
