@@ -14,6 +14,27 @@ SB_KEY = (os.getenv("SUPABASE_KEY") or st.secrets.get("SUPABASE_KEY", "")).strip
 SENHA_ADMIN = (os.getenv("ADMIN_PASSWORD") or st.secrets.get("ADMIN_PASSWORD", "vectorx2026")).strip()
 
 
+def enviar_boas_vindas(tel, chave, produtor, fazenda):
+    if not tel or not chave:
+        return False
+    primeiro_nome = produtor.strip().split().pop(0)
+    msg = (
+        f"🌾 *Bem-vindo ao VectorX Agro, {primeiro_nome}!*\n\n"
+        f"A propriedade *{fazenda}* já está conectada ao nosso monitoramento inteligente por satélite e clima em tempo real.\n\n"
+        f"📲 *O que você passa a receber aqui:*\n"
+        f"• *06h00 (Todo dia):* Previsão local, melhor janela para pulverização/adubação e conforto térmico do rebanho.\n"
+        f"• *24h por dia (Emergência):* Alerta imediato com mapa de satélite e direção do vento se surgir foco de incêndio perto da sua área.\n"
+        f"• *Segunda-feira às 07h00:* Raio-X semanal da saúde do seu pasto via satélite.\n\n"
+        f"Conte conosco para proteger e valorizar a sua produção! 🚜🛡️"
+    )
+    try:
+        u = "https:" + "//://callmebot.com"
+        r = requests.get(u, params={"phone": tel, "text": msg, "apikey": chave}, timeout=20)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
 def ler_kml(conteudo_bytes):
     raiz = ET.fromstring(conteudo_bytes)
     coords = []
@@ -57,12 +78,12 @@ with st.form("cadastro_fazenda"):
     cliente_nome = st.text_input("Nome do Produtor / Cliente", placeholder="Ex: João da Silva")
     fazenda_nome = st.text_input("Nome da Propriedade", placeholder="Ex: Sítio Boa Esperança - Cordeiro/RJ")
     whatsapp = st.text_input("WhatsApp do Produtor (com DDI 55 + DDD)", placeholder="Ex: 5522999999999")
-    apikey_wpp = st.text_input("API Key CallMeBot", placeholder="Ex: 1234567")
+    apikey_wpp = st.text_input("API Key CallMeBot (opcional se usar envio central)", placeholder="Ex: 1234567")
     cultura = st.text_input("Cultura / Atividade Principal", value="Pastagem e Silagem")
     raio_km = st.number_input("Raio de Alerta de Queimadas (km)", min_value=2.0, max_value=50.0, value=15.0, step=1.0)
     arq_geo = st.file_uploader("Arquivo do Perímetro (.KML ou .GeoJSON / CAR)", type=["kml", "geojson", "json"])
     usar_exemplo = st.checkbox("🧪 Usar polígono de exemplo em Cordeiro/RJ (teste rápido sem arquivo)")
-    enviado = st.form_submit_button("✅ Cadastrar Fazenda no Sistema")
+    enviado = st.form_submit_button("✅ Cadastrar Fazenda e Enviar Boas-Vindas")
 
 if enviado:
     if not cliente_nome or not fazenda_nome or not whatsapp or (not arq_geo and not usar_exemplo):
@@ -76,7 +97,6 @@ if enviado:
             if not poly or not poly.is_valid:
                 st.error("Não foi possível ler um polígono válido.")
             else:
-                centro = poly.centroid
                 headers = {"apikey": SB_KEY, "Authorization": f"Bearer {SB_KEY}", "Content-Type": "application/json", "Prefer": "return=representation"}
                 payload = {
                     "cliente_nome": cliente_nome.strip(),
@@ -90,7 +110,9 @@ if enviado:
                 }
                 r = requests.post(f"{SB_URL}/rest/v1/fazendas", headers=headers, json=payload, timeout=15)
                 if r.status_code in (200, 201):
-                    st.success(f"🎉 **{fazenda_nome}** (Produtor: {cliente_nome}) cadastrada com sucesso! Centroide: ({centro.y:.4f}, {centro.x:.4f})")
+                    wpp_ok = enviar_boas_vindas(whatsapp.strip(), apikey_wpp.strip(), cliente_nome, fazenda_nome)
+                    aviso_wpp = " 📲 Mensagem de boas-vindas enviada no WhatsApp!" if wpp_ok else ""
+                    st.success(f"🎉 **{fazenda_nome}** cadastrada com sucesso!{aviso_wpp}")
                 else:
                     st.error(f"Erro ao salvar no Supabase ({r.status_code}): {r.text}")
         except Exception as e:
