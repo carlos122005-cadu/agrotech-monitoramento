@@ -3,7 +3,6 @@ import math
 import requests
 import pandas as pd
 from io import StringIO
-from urllib.parse import urlunparse
 from datetime import datetime, timezone, timedelta
 
 NASA_FIRMS_KEY = (os.getenv("NASA_FIRMS_KEY") or os.getenv("FIRMS_MAP_KEY") or "").strip()
@@ -29,7 +28,8 @@ NOME_FAZENDA = os.getenv("NOME_FAZENDA", "Fazenda Piloto - Cordeiro/RJ")
 
 
 def montar_url(dominio, caminho):
-    return urlunparse(("https", dominio.strip(), "/" + caminho.strip().lstrip("/"), "", "", ""))
+    barra = chr(47)
+    return "".join(["https:", barra, barra, dominio.strip(), barra, caminho.strip().lstrip(barra)])
 
 
 def calcular_distancia_km(lat1, lon1, lat2, lon2):
@@ -81,8 +81,8 @@ def consultar_clima():
         temp = float(atual["temperature_2m"])
         umid = float(atual["relative_humidity_2m"])
         vento = float(atual["wind_speed_10m"])
-        chuva_hoje = float(daily["precipitation_sum"])
-        temp_min = float(daily["temperature_2m_min"])
+        chuva_hoje = float(daily["precipitation_sum"][0])
+        temp_min = float(daily["temperature_2m_min"][0])
 
         status_pulv, _ = avaliar_pulverizacao(temp, umid, vento, 0)
         melhor_hora, melhor_score = "Sem janela ideal nas próximas 24h", 0
@@ -94,7 +94,7 @@ def consultar_clima():
             _, score = avaliar_pulverizacao(ht, hu, hv, hp)
             if score > melhor_score:
                 melhor_score = score
-                hf = hourly["time"][i].split("T")
+                hf = hourly["time"][i].split("T")[1]
                 melhor_hora = f"{hf} ({ht:.0f}°C | Vento {hv:.0f} km/h | Umid. {hu:.0f}%)"
 
         return {
@@ -166,7 +166,7 @@ def main():
     focos = verificar_focos(clima["chuva_hoje"] if clima else 0.0)
 
     if focos:
-        f0 = focos
+        f0 = focos[0]
         link = montar_url("://google.com", "maps") + f"?q={f0['lat']},{f0['lon']}"
         bloco_fogo = f"🚨 *ALERTA DE FOCO DE CALOR!*\n• Total ({RAIO_KM:.0f} km): {len(focos)}\n• Mais próximo: *{f0['dist']} km*\n• Mapa: {link}"
     elif clima and clima["risco_30"]:
@@ -198,4 +198,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-        
+    
