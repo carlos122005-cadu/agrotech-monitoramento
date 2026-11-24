@@ -54,6 +54,7 @@ if senha != SENHA_ADMIN:
 
 with st.form("cadastro_fazenda"):
     st.subheader("📍 Nova Fazenda Monitorada")
+    cliente_nome = st.text_input("Nome do Produtor / Cliente", placeholder="Ex: João da Silva")
     fazenda_nome = st.text_input("Nome da Propriedade", placeholder="Ex: Sítio Boa Esperança - Cordeiro/RJ")
     whatsapp = st.text_input("WhatsApp do Produtor (com DDI 55 + DDD)", placeholder="Ex: 5522999999999")
     apikey_wpp = st.text_input("API Key CallMeBot", placeholder="Ex: 1234567")
@@ -64,8 +65,8 @@ with st.form("cadastro_fazenda"):
     enviado = st.form_submit_button("✅ Cadastrar Fazenda no Sistema")
 
 if enviado:
-    if not fazenda_nome or not whatsapp or (not arq_geo and not usar_exemplo):
-        st.error("Preencha o nome, o WhatsApp e envie um arquivo (ou marque o polígono de exemplo).")
+    if not cliente_nome or not fazenda_nome or not whatsapp or (not arq_geo and not usar_exemplo):
+        st.error("Preencha o nome do produtor, nome da fazenda, WhatsApp e envie um arquivo (ou marque o polígono de exemplo).")
     else:
         try:
             if usar_exemplo and not arq_geo:
@@ -78,6 +79,7 @@ if enviado:
                 centro = poly.centroid
                 headers = {"apikey": SB_KEY, "Authorization": f"Bearer {SB_KEY}", "Content-Type": "application/json", "Prefer": "return=representation"}
                 payload = {
+                    "cliente_nome": cliente_nome.strip(),
                     "fazenda_nome": fazenda_nome.strip(),
                     "whatsapp": whatsapp.strip(),
                     "apikey_whatsapp": apikey_wpp.strip(),
@@ -88,7 +90,7 @@ if enviado:
                 }
                 r = requests.post(f"{SB_URL}/rest/v1/fazendas", headers=headers, json=payload, timeout=15)
                 if r.status_code in (200, 201):
-                    st.success(f"🎉 **{fazenda_nome}** cadastrada com sucesso! Centroide: ({centro.y:.4f}, {centro.x:.4f})")
+                    st.success(f"🎉 **{fazenda_nome}** (Produtor: {cliente_nome}) cadastrada com sucesso! Centroide: ({centro.y:.4f}, {centro.x:.4f})")
                 else:
                     st.error(f"Erro ao salvar no Supabase ({r.status_code}): {r.text}")
         except Exception as e:
