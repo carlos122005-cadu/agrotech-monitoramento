@@ -6,3 +6,5 @@ requests
 matplotlib
 contextily
 streamlit
+numpy
+rasterio
