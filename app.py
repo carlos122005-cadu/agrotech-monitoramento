@@ -16,7 +16,7 @@ SENHA_ADMIN = (os.getenv("ADMIN_PASSWORD") or st.secrets.get("ADMIN_PASSWORD", "
 
 def enviar_boas_vindas(tel, chave, produtor, fazenda):
     if not tel or not chave:
-        return False
+        return False, "Sem API Key informada"
     primeiro_nome = produtor.strip().split().pop(0)
     msg = (
         f"🌾 *Bem-vindo ao VectorX Agro, {primeiro_nome}!*\n\n"
@@ -29,10 +29,17 @@ def enviar_boas_vindas(tel, chave, produtor, fazenda):
     )
     try:
         u = "https:" + "//://callmebot.com"
-        r = requests.get(u, params={"phone": tel, "text": msg, "apikey": chave}, timeout=20)
-        return r.status_code == 200
-    except Exception:
-        return False
+        r = requests.get(
+            u,
+            params={"phone": tel.lstrip("+"), "text": msg, "apikey": chave},
+            headers={"User-Agent": "VectorXAgro/1.0"},
+            timeout=25
+        )
+        if r.status_code == 200 and ("queued" in r.text.lower() or "sent" in r.text.lower()):
+            return True, "Enviado!"
+        return False, f"Status {r.status_code}: {r.text[:120]}"
+    except Exception as e:
+        return False, str(e)[:80]
 
 
 def ler_kml(conteudo_bytes):
@@ -110,9 +117,11 @@ if enviado:
                 }
                 r = requests.post(f"{SB_URL}/rest/v1/fazendas", headers=headers, json=payload, timeout=15)
                 if r.status_code in (200, 201):
-                    wpp_ok = enviar_boas_vindas(whatsapp.strip(), apikey_wpp.strip(), cliente_nome, fazenda_nome)
-                    aviso_wpp = " 📲 Mensagem de boas-vindas enviada no WhatsApp!" if wpp_ok else ""
-                    st.success(f"🎉 **{fazenda_nome}** cadastrada com sucesso!{aviso_wpp}")
+                    wpp_ok, detalhe_wpp = enviar_boas_vindas(whatsapp.strip(), apikey_wpp.strip(), cliente_nome, fazenda_nome)
+                    if wpp_ok:
+                        st.success(f"🎉 **{fazenda_nome}** cadastrada e mensagem de boas-vindas enviada no WhatsApp!")
+                    else:
+                        st.warning(f"🎉 **{fazenda_nome}** salva no banco, mas o WhatsApp retornou: {detalhe_wpp}")
                 else:
                     st.error(f"Erro ao salvar no Supabase ({r.status_code}): {r.text}")
         except Exception as e:
