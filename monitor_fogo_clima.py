@@ -36,10 +36,11 @@ def buscar_fazendas():
             return []
         fazs = []
         for item in r.json():
-            d = item.get("dados") or {}
+            d = item.get("dados") or item
+            nome_fz = next((d[k] for k in ["nome_fazenda", "nome", "propriedade", "fazenda", "titulo"] if d.get(k)), "Fazenda Piloto - Cordeiro/RJ")
             fazs.append({
                 "id": d.get("id"),
-                "nome": d.get("nome_fazenda") or d.get("nome") or d.get("propriedade") or "Fazenda VectorX",
+                "nome": str(nome_fz).strip(),
                 "lat": float(item.get("lat") or F_LAT),
                 "lon": float(item.get("lon") or F_LON),
                 "raio": float(d.get("raio_km") or F_RAIO),
@@ -139,7 +140,23 @@ def ver_clima(lat, lon, agora):
         except Exception:
             time.sleep(2)
     if not dados:
-        return [], "Dados climáticos indisponíveis no momento.", None
+        try:
+            fb = requests.get(f"https://wttr.in{lat},{lon}?format=j1", headers={"User-Agent": "VectorXAgro/1.0"}, timeout=15).json()
+            atual = next(iter(fb.get("current_condition", [])))
+            t, u_ar, v = float(atual["temp_C"]), float(atual["humidity"]), float(atual["windspeedKmph"])
+            dv, ch = float(atual["winddirDegree"]), float(atual["precipMM"])
+            destino = dir_vento(dv)
+            st_p, _ = eval_pulv(t, u_ar, v, ch, 20.0)
+            res = (
+                f"🌡️ Temp: {t:.1f}°C | 💧 Umid: {u_ar:.0f}% (Fonte Reserva)\n"
+                f"💨 Vento: {v:.1f}km/h (indo p/ {destino})\n"
+                f"🌧️ Chuva: {ch:.1f}mm\n"
+                f"🚜 *Pulverização/Adubo:* {st_p}\n"
+                f"{eval_gado(t, u_ar)}"
+            )
+            return [], res, {"vel": v, "dest": destino}
+        except Exception:
+            return [], "Dados climáticos indisponíveis no momento.", None
 
     em, hr = dados.get("current", {}), dados.get("hourly", {})
     t, u_ar, v = float(em.get("temperature_2m", 0)), float(em.get("relative_humidity_2m", 0)), float(em.get("wind_speed_10m", 0))
@@ -213,12 +230,12 @@ def principal():
                 if str(linha.get("confidence", "")).lower() != "l" and float(linha.get("frp", 0)) >= 2.0:
                     d = dist_km(fz["lat"], fz["lon"], float(linha["latitude"]), float(linha["longitude"]))
                     if d <= fz["raio"]:
-                        focos.append({"lat": float(linha["latitude"]), "lon": float(linha["longitude"]), "d": round(d, 2)})
+                                                focos.append({"lat": float(linha["latitude"]), "lon": float(linha["longitude"]), "d": round(d, 2)})
         focos.sort(key=lambda x: x["d"])
         mensagens, chave = [], None
 
         if focos:
-            mp = focos[0]
+            mp = next(iter(focos))
             chave = f"FOGO_{round(mp['lat'], 2)}_{round(mp['lon'], 2)}"
             mensagens.append(f"🔥 *ALERTA DE QUEIMADA DETECTADO!*\n• Mais próximo: a *{mp['d']}km* da propriedade.")
             if iv:
@@ -244,3 +261,5 @@ def principal():
 if __name__ == "__main__":
     principal()
 # FIM_DO_CODIGO
+
+    
