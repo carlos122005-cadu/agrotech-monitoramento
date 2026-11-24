@@ -2,7 +2,10 @@ name: Sentinela VectorX Agro 24/7
 
 on:
   schedule:
-    - cron: '0 * * * *'
+    # A cada 30 min das 10h às 20h BRT (13h às 23h UTC) + rotina das 06h BRT (09h UTC)
+    - cron: '*/30 13-23 * * *'
+    # A cada 2 horas na madrugada/início da manhã BRT (00h às 12h UTC)
+    - cron: '0 0,2,4,6,8,9,10,12 * * *'
   workflow_dispatch:
 
 jobs:
@@ -31,5 +34,7 @@ jobs:
           NASA_FIRMS_KEY: ${{ secrets.NASA_FIRMS_KEY }}
           WHATSAPP_PHONE: ${{ secrets.WHATSAPP_PHONE }}
           WHATSAPP_APIKEY: ${{ secrets.WHATSAPP_APIKEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python monitor_fogo_clima.py
         
