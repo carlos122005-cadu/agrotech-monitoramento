@@ -15,22 +15,17 @@ NASA_FIRMS_KEY = [p for p in _raw_nasa.split("/") if len(p) == 32][-1] if "/" in
 
 FALLBACK_PHONE = (os.getenv("WHATSAPP_PHONE") or "").strip()
 FALLBACK_APIKEY = (os.getenv("WHATSAPP_APIKEY") or "").strip()
-
 SUPABASE_URL = (os.getenv("SUPABASE_URL") or "").strip().rstrip("/")
 SUPABASE_KEY = (os.getenv("SUPABASE_KEY") or "").strip()
 
 
 def criar_link(partes_dominio, *pedacos):
-    barra = "/"
-    return "https:" + barra + barra + ".".join(partes_dominio) + barra + barra.join(pedacos)
+    b = "/"
+    return "https:" + b + b + ".".join(partes_dominio) + b + b.join(pedacos)
 
 
-def headers_supabase():
-    return {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type": "application/json",
-    }
+def headers_sb():
+    return {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"}
 
 
 def buscar_fazendas_supabase():
@@ -38,9 +33,9 @@ def buscar_fazendas_supabase():
         return []
     url = f"{SUPABASE_URL}/rest/v1/rpc/listar_fazendas_ativas"
     try:
-        r = requests.post(url, headers=headers_supabase(), json={}, timeout=20)
+        r = requests.post(url, headers=headers_sb(), json={}, timeout=20)
         if r.status_code != 200:
-            print(f"⚠️ Erro Supabase listar fazendas ({r.status_code}): {r.text[:150]}")
+            print(f"⚠️ Erro Supabase ({r.status_code}): {r.text[:150]}")
             return []
         lista = []
         for item in r.json():
@@ -59,7 +54,7 @@ def buscar_fazendas_supabase():
             })
         return lista
     except Exception as e:
-        print(f"⚠️ Falha conexão Supabase: {e}")
+        print(f"⚠️ Falha Supabase: {e}")
         return []
 
 
@@ -68,14 +63,9 @@ def alerta_ja_enviado_24h(fazenda_id, tipo_alerta):
         return False
     limite = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
     url = f"{SUPABASE_URL}/rest/v1/alertas_enviados"
-    params = {
-        "select": "id",
-        "fazenda_id": f"eq.{fazenda_id}",
-        "tipo_alerta": f"eq.{tipo_alerta}",
-        "created_at": f"gte.{limite}",
-    }
+    params = {"select": "id", "fazenda_id": f"eq.{fazenda_id}", "tipo_alerta": f"eq.{tipo_alerta}", "created_at": f"gte.{limite}"}
     try:
-        r = requests.get(url, headers=headers_supabase(), params=params, timeout=15)
+        r = requests.get(url, headers=headers_sb(), params=params, timeout=15)
         return r.status_code == 200 and len(r.json()) > 0
     except Exception:
         return False
@@ -86,9 +76,9 @@ def registrar_alerta_e_limpar(fazenda_id, tipo_alerta):
         return
     url = f"{SUPABASE_URL}/rest/v1/alertas_enviados"
     try:
-        requests.post(url, headers=headers_supabase(), json={"fazenda_id": fazenda_id, "tipo_alerta": tipo_alerta}, timeout=15)
+        requests.post(url, headers=headers_sb(), json={"fazenda_id": fazenda_id, "tipo_alerta": tipo_alerta}, timeout=15)
         limite_48h = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
-        requests.delete(url, headers=headers_supabase(), params={"created_at": f"lt.{limite_48h}"}, timeout=15)
+        requests.delete(url, headers=headers_sb(), params={"created_at": f"lt.{limite_48h}"}, timeout=15)
     except Exception as e:
         print(f"⚠️ Aviso log Supabase: {e}")
 
@@ -96,22 +86,20 @@ def registrar_alerta_e_limpar(fazenda_id, tipo_alerta):
 def calcular_distancia_km(lat1, lon1, lat2, lon2):
     r = 6371.0
     p1, p2 = math.radians(lat1), math.radians(lat2)
-    dp = math.radians(lat2 - lat1)
-    dl = math.radians(lon2 - lon1)
+    dp, dl = math.radians(lat2 - lat1), math.radians(lon2 - lon1)
     a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
     return 2 * r * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
-def direcao_propagacao_vento(graus_origem):
-    destino = (graus_origem + 180.0) % 360.0
+def direcao_vento(graus):
     pontos = ["Norte", "Nordeste", "Leste", "Sudeste", "Sul", "Sudoeste", "Oeste", "Noroeste"]
-    return pontos[int((destino + 22.5) // 45) % 8]
+    return pontos[int((((graus + 180.0) % 360.0) + 22.5) // 45) % 8]
 
 
-def avaliar_pulverizacao(temp, umid, vento, chuva_mm, prob_chuva):
-    if chuva_mm > 0.2 or prob_chuva >= 55 or vento > 15 or umid < 45 or temp > 32:
+def avaliar_pulverizacao(temp, umid, vento, chuva_mm, prob):
+    if chuva_mm > 0.2 or prob >= 55 or vento > 15 or umid < 45 or temp > 32:
         return "🔴 NÃO APLICAR (Risco de chuva, deriva ou evaporação)", 10
-    if prob_chuva >= 30 or umid > 90 or vento >= 10 or umid < 55 or temp > 28 or vento < 3:
+    if prob >= 30 or umid > 90 or vento >= 10 or umid < 55 or temp > 28 or vento < 3:
         return "🟡 CAUTELA (Orvalho/umidade alta, vento ou chance de pancada)", 60
     return "🟢 IDEAL (Janela ótima para pulverização e adubação)", 100
 
@@ -127,15 +115,15 @@ def avaliar_rebanho(temp, umid):
     return "🟢 *Rebanho:* Conforto térmico ideal."
 
 
-def enviar_alerta_whatsapp(phone, apikey, mensagem):
+def enviar_whatsapp(phone, apikey, msg):
     if not phone or not apikey:
-        print("⚠️ Credenciais WhatsApp ausentes:\n" + mensagem)
+        print("⚠️ Credenciais WhatsApp ausentes:\n" + msg)
         return False
     url = criar_link(["api", "callmebot", "com"], "whatsapp.php")
     try:
-        resp = requests.get(url, params={"phone": phone, "text": mensagem, "apikey": apikey}, timeout=20)
-        print("✅ WhatsApp enviado!" if resp.status_code == 200 else f"❌ Erro WhatsApp: {resp.status_code}")
-        return resp.status_code == 200
+        r = requests.get(url, params={"phone": phone, "text": msg, "apikey": apikey}, timeout=20)
+        print("✅ WhatsApp enviado!" if r.status_code == 200 else f"❌ Erro WhatsApp: {r.status_code}")
+        return r.status_code == 200
     except Exception as e:
         print(f"❌ Falha WhatsApp: {e}")
         return False
@@ -147,9 +135,9 @@ def verificar_clima(lat, lon, agora_brt):
     dados = None
     for t in range(2):
         try:
-            resp = requests.get(url, headers={"User-Agent": "VectorXAgro/1.0"}, timeout=25)
-            if resp.status_code == 200 and resp.text.strip():
-                dados = resp.json()
+            r = requests.get(url, headers={"User-Agent": "VectorXAgro/1.0"}, timeout=25)
+            if r.status_code == 200 and r.text.strip():
+                dados = r.json()
                 break
         except Exception as e:
             print(f"⚠️ Tentativa {t + 1} Open-Meteo: {e}")
@@ -162,7 +150,7 @@ def verificar_clima(lat, lon, agora_brt):
     temp = float(atual.get("temperature_2m", 0))
     umid = float(atual.get("relative_humidity_2m", 0))
     vento = float(atual.get("wind_speed_10m", 0))
-    dir_vento = float(atual.get("wind_direction_10m", 0))
+    dir_v = float(atual.get("wind_direction_10m", 0))
     chuva = float(atual.get("precipitation", 0))
 
     hora_str = agora_brt.strftime("%Y-%m-%dT%H:00")
@@ -184,40 +172,37 @@ def verificar_clima(lat, lon, agora_brt):
 
     melhor_hora, melhor_score = "Sem janela ideal nas próximas 24h", 0
     for i in range(idx + 1, min(idx + 25, len(tempos_h))):
-        ht = float(hourly["temperature_2m"][i])
-        hu = float(hourly["relative_humidity_2m"][i])
-        hv = float(hourly["wind_speed_10m"][i])
-        hc = float(hourly["precipitation"][i] or 0)
+        ht, hu = float(hourly["temperature_2m"][i]), float(hourly["relative_humidity_2m"][i])
+        hv, hc = float(hourly["wind_speed_10m"][i]), float(hourly["precipitation"][i] or 0)
         hp = float(hourly["precipitation_probability"][i] or 0)
         _, score = avaliar_pulverizacao(ht, hu, hv, hc, hp)
         if score > melhor_score:
             melhor_score = score
             melhor_hora = f"{tempos_h[i].replace('T', ' às ')} ({ht:.0f}°C | Vento {hv:.0f} km/h | Umid. {hu:.0f}%)"
 
-    destino_vento = direcao_propagacao_vento(dir_vento)
+    destino = direcao_vento(dir_v)
     resumo = (
         f"🌡️ Temp: {temp:.1f}°C | 💧 Umid: {umid:.0f}%\n"
-        f"💨 Vento: {vento:.1f} km/h (indo p/ {destino_vento})\n"
+        f"💨 Vento: {vento:.1f} km/h (indo p/ {destino})\n"
         f"🌧️ Chuva: {chuva:.1f} mm (Chance: {prob_agora:.0f}%)\n\n"
         f"🚜 *Pulverização/Adubação:*\n{status_pulv}\n"
         f"⏰ *Melhor Janela (24h):* {melhor_hora}\n\n"
         f"{gado}"
     )
-    return alertas, resumo, {"velocidade": vento, "destino": destino_vento}
+    return alertas, resumo, {"velocidade": vento, "destino": destino}
 
 
 def baixar_focos_regiao(fazendas):
     if not NASA_FIRMS_KEY or not fazendas:
         return pd.DataFrame()
-    lats = [f["lat"] for f in fazendas]
-    lons = [f["lon"] for f in fazendas]
+    lats, lons = [f["lat"] for f in fazendas], [f["lon"] for f in fazendas]
     area = f"{min(lons) - 1.0:.4f},{min(lats) - 1.0:.4f},{max(lons) + 1.0:.4f},{max(lats) + 1.0:.4f}"
     url = criar_link(["firms", "modaps", "eosdis", "nasa", "gov"], "api", "area", "csv", NASA_FIRMS_KEY, "VIIRS_SNPP_NRT", area, "1")
     try:
-        resp = requests.get(url, headers={"User-Agent": "VectorXAgro/1.0"}, timeout=25)
-        if resp.status_code != 200:
+        r = requests.get(url, headers={"User-Agent": "VectorXAgro/1.0"}, timeout=25)
+        if r.status_code != 200:
             return pd.DataFrame()
-        df = pd.read_csv(StringIO(resp.text))
+        df = pd.read_csv(StringIO(r.text))
         print(f"🛰️ Satélite NASA FIRMS: {len(df)} leitura(s) bruta(s) na região.")
         return df
     except Exception as e:
@@ -225,11 +210,20 @@ def baixar_focos_regiao(fazendas):
         return pd.DataFrame()
 
 
-def filtrar_focos_fazenda(df_focos, lat, lon, raio_km):
-    if df_focos.empty:
+def filtrar_focos(df, lat, lon, raio):
+    if df.empty:
         return []
     focos = []
-    for _, row in df_focos.iterrows():
+    for _, row in df.iterrows():
         if str(row.get("confidence", "")).lower() == "l" or float(row.get("frp", 0.0)) < 2.0:
             continue
-                      
+        dist = calcular_distancia_km(lat, lon, float(row["latitude"]), float(row["longitude"]))
+        if dist <= raio:
+            focos.append({"lat": float(row["latitude"]), "lon": float(row["longitude"]), "distancia_km": round(dist, 2)})
+    focos.sort(key=lambda x: x["distancia_km"])
+    return focos
+
+
+def executar_sentinela():
+    agora_brt = datetime.now(timezone(timedelta(hours=-3)))
+            
