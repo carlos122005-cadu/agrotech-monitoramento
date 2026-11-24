@@ -182,7 +182,8 @@ def ver_clima(lat, lon, agora):
         hc, hp = float(hr["precipitation"][i] or 0), float(hr["precipitation_probability"][i] or 0)
         _, sc = eval_pulv(ht, hu, hv, hc, hp)
         if sc >= 80:
-            ms_ph = f"{th[i].replace('T', ' ')} ({ht:.0f}°C | Vento:{hv:.0f}km/h | Umid:{hu:.0f}%)"
+            dia_lbl = "Hoje" if th[i].startswith(agora.strftime("%Y-%m-%d")) else "Amanhã"
+            ms_ph = f"{dia_lbl} às {th[i][-5:]} ({ht:.0f}°C | Vento:{hv:.0f}km/h | Umid:{hu:.0f}%)"
             break
 
     destino = dir_vento(dv)
@@ -228,9 +229,9 @@ def principal():
         if not df.empty:
             for _, linha in df.iterrows():
                 if str(linha.get("confidence", "")).lower() != "l" and float(linha.get("frp", 0)) >= 2.0:
-                    d = dist_km(fz["lat"], fz["lon"], float(linha["latitude"]), float(linha["longitude"]))
+                        d = dist_km(fz["lat"], fz["lon"], float(linha["latitude"]), float(linha["longitude"]))
                     if d <= fz["raio"]:
-                                                focos.append({"lat": float(linha["latitude"]), "lon": float(linha["longitude"]), "d": round(d, 2)})
+                        focos.append({"lat": float(linha["latitude"]), "lon": float(linha["longitude"]), "d": round(d, 2)})
         focos.sort(key=lambda x: x["d"])
         mensagens, chave = [], None
 
@@ -261,5 +262,3 @@ def principal():
 if __name__ == "__main__":
     principal()
 # FIM_DO_CODIGO
-
-    
