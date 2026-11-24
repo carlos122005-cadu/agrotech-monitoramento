@@ -139,7 +139,7 @@ def ver_clima(lat, lon, agora):
             time.sleep(2)
     if not dados:
         try:
-    u_met = f"{link(['api', 'met', 'no'], ['weatherapi', 'locationforecast', '2.0', 'compact'])}?lat={lat:.4f}&lon={lon:.4f}"
+            u_met = f"{link(['api', 'met', 'no'], ['weatherapi', 'locationforecast', '2.0', 'compact'])}?lat={lat:.4f}&lon={lon:.4f}"
     
             fb = requests.get(u_met, headers={"User-Agent": "VectorXAgro/1.0 ://github.com"}, timeout=20).json()
             serie = fb["properties"]["timeseries"]
