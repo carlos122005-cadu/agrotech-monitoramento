@@ -3,8 +3,11 @@ import math
 import time
 import requests
 import pandas as pd
+import geopandas as gpd
+from shapely.geometry import Point, shape
 from io import StringIO
 from datetime import datetime, timezone, timedelta
+from gerar_mapa import gerar_mapa_tatico
 
 F_LAT = float((os.getenv("FAZENDA_LAT") or "-22.0286").strip().replace(",", "."))
 F_LON = float((os.getenv("FAZENDA_LON") or "-42.3611").strip().replace(",", "."))
@@ -38,6 +41,7 @@ def buscar_fazendas():
         for item in r.json():
             d = item.get("dados") or item
             nome_fz = next((d[k] for k in ["nome_fazenda", "nome", "propriedade", "fazenda", "titulo"] if d.get(k)), "Fazenda Piloto - Cordeiro/RJ")
+            geom_raw = item.get("geojson") or d.get("geojson") or item.get("poligono") or d.get("geom")
             fazs.append({
                 "id": d.get("id"),
                 "nome": str(nome_fz).strip(),
@@ -46,6 +50,7 @@ def buscar_fazendas():
                 "raio": float(d.get("raio_km") or F_RAIO),
                 "tel": str(d.get("whatsapp") or d.get("telefone") or F_PHONE).strip(),
                 "chave": str(d.get("apikey_whatsapp") or d.get("chave_de_API") or F_APIKEY).strip(),
+                "geom": geom_raw,
             })
         return fazs
     except Exception as e:
@@ -53,6 +58,32 @@ def buscar_fazendas():
         return []
 
 
+def publicar_mapa(fz, focos, iv, t_atual, u_atual):
+    if not SB_URL or not SB_KEY or not focos:
+        return None
+    try:
+        if isinstance(fz.get("geom"), dict):
+            poly = shape(fz["geom"])
+        else:
+            poly = Point(fz["lon"], fz["lat"]).buffer(0.015)
+        gdf = gpd.GeoDataFrame(geometry=[poly], crs="EPSG:4326")
+        focos_fmt = [{"latitude": fc["lat"], "longitude": fc["lon"]} for fc in focos[:5]]
+        arq_local = f"mapa_{int(time.time())}.png"
+        vel = iv["vel"] if iv else 0
+        deg = (iv.get("deg", 0) + 180) % 360 if iv else 0
+        gerar_mapa_tatico(gdf, fz["nome"], focos_fmt, round(t_atual, 1), round(u_atual), round(vel, 1), round(deg), arq_local)
+
+        nome_remoto = f"alerta_{fz.get('id') or 'piloto'}_{int(time.time())}.png"
+        u_up = f"{SB_URL}/storage/v1/object/mapas/{nome_remoto}"
+        headers_up = {"apikey": SB_KEY, "Authorization": f"Bearer {SB_KEY}", "Content-Type": "image/png", "x-upsert": "true"}
+        with open(arq_local, "rb") as f_img:
+            up = requests.post(u_up, headers=headers_up, data=f_img.read(), timeout=25)
+        if up.status_code in (200, 201):
+            return f"{SB_URL}/storage/v1/object/public/mapas/{nome_remoto}"
+        print(f"⚠️ Erro upload mapa ({up.status_code}): {up.text[:100]}")
+    except Exception as e:
+        print(f"⚠️ Falha ao gerar mapa: {e}")
+    return None
 def ja_alertado(fid, tipo):
     if not SB_URL or not SB_KEY or not fid:
         return False
@@ -125,7 +156,9 @@ def enviar_wpp(tel, chave, msg):
         return r.status_code == 200
     except Exception as e:
         print(f"❌ Falha WPP: {e}")
-        return False  
+        return False
+
+
 def ver_clima(lat, lon, agora):
     u = f"{link(['api', 'open-meteo', 'com'], ['v1', 'forecast'])}?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,wind_speed_10m,wind_direction_10m,precipitation&hourly=temperature_2m,relative_humidity_2m,wind_speed_10m,precipitation,precipitation_probability&timezone=America%2FSao_Paulo&forecast_days=2"
     dados = None
@@ -140,25 +173,16 @@ def ver_clima(lat, lon, agora):
     if not dados:
         try:
             u_met = f"{link(['api', 'met', 'no'], ['weatherapi', 'locationforecast', '2.0', 'compact'])}?lat={lat:.4f}&lon={lon:.4f}"
-    
-            fb = requests.get(u_met, headers={"User-Agent": "VectorXAgro/1.0 ://github.com"}, timeout=20).json()
+            fb = requests.get(u_met, headers={"User-Agent": "VectorXAgro/1.0 github.com"}, timeout=20).json()
             serie = fb["properties"]["timeseries"]
             atual = next(iter(serie))["data"]["instant"]["details"]
-            t = float(atual.get("air_temperature", 0))
-            u_ar = float(atual.get("relative_humidity", 0))
-            v = float(atual.get("wind_speed", 0)) * 3.6
-            dv = float(atual.get("wind_from_direction", 0))
+            t, u_ar = float(atual.get("air_temperature", 0)), float(atual.get("relative_humidity", 0))
+            v, dv = float(atual.get("wind_speed", 0)) * 3.6, float(atual.get("wind_from_direction", 0))
             ch = float(next(iter(serie))["data"].get("next_1_hours", {}).get("details", {}).get("precipitation_amount", 0))
             destino = dir_vento(dv)
             st_p, _ = eval_pulv(t, u_ar, v, ch, 20.0)
-            res = (
-                f"🌡️ Temp: {t:.1f}°C | 💧 Umid: {u_ar:.0f}% (Satélite MET)\n"
-                f"💨 Vento: {v:.1f}km/h (indo p/ {destino})\n"
-                f"🌧️ Chuva: {ch:.1f}mm\n"
-                f"🚜 *Pulverização/Adubo:* {st_p}\n"
-                f"{eval_gado(t, u_ar)}"
-            )
-            return [], res, {"vel": v, "dest": destino}
+            res = f"🌡️ Temp: {t:.1f}°C | 💧 Umid: {u_ar:.0f}% (Satélite MET)\n💨 Vento: {v:.1f}km/h (indo p/ {destino})\n🌧️ Chuva: {ch:.1f}mm\n🚜 *Pulverização/Adubo:* {st_p}\n{eval_gado(t, u_ar)}"
+            return [], res, {"vel": v, "dest": destino, "deg": dv, "t": t, "u": u_ar}
         except Exception:
             return [], "Dados climáticos indisponíveis no momento.", None
 
@@ -191,15 +215,8 @@ def ver_clima(lat, lon, agora):
             break
 
     destino = dir_vento(dv)
-    res = (
-        f"🌡️ Temp: {t:.1f}°C | 💧 Umid: {u_ar:.0f}%\n"
-        f"💨 Vento: {v:.1f}km/h (indo p/ {destino})\n"
-        f"🌧️ Chuva: {ch:.1f}mm (Chance: {pa:.0f}%)\n"
-        f"🚜 *Pulverização/Adubo:* {st_p}\n"
-        f"🕒 *Próx. janela boa:* {ms_ph}\n"
-        f"{eval_gado(t, u_ar)}"
-    )
-    return alertas, res, {"vel": v, "dest": destino}
+    res = f"🌡️ Temp: {t:.1f}°C | 💧 Umid: {u_ar:.0f}%\n💨 Vento: {v:.1f}km/h (indo p/ {destino})\n🌧️ Chuva: {ch:.1f}mm (Chance: {pa:.0f}%)\n🚜 *Pulverização/Adubo:* {st_p}\n🕒 *Próx. janela boa:* {ms_ph}\n{eval_gado(t, u_ar)}"
+    return alertas, res, {"vel": v, "dest": destino, "deg": dv, "t": t, "u": u_ar}
 
 
 def baixar_focos(faz):
@@ -224,7 +241,7 @@ def principal():
     faz = buscar_fazendas()
     print(f"🏡 {len(faz)} fazenda(s) carregada(s) do Supabase." if faz else "🏡 Usando segredos alternativos.")
     if not faz:
-        faz = [{"id": None, "nome": "Fazenda Piloto - Cordeiro/RJ", "lat": F_LAT, "lon": F_LON, "raio": F_RAIO, "tel": F_PHONE, "chave": F_APIKEY}]
+        faz = [{"id": None, "nome": "Fazenda Piloto - Cordeiro/RJ", "lat": F_LAT, "lon": F_LON, "raio": F_RAIO, "tel": F_PHONE, "chave": F_APIKEY, "geom": None}]
 
     df = baixar_focos(faz)
     for fz in faz:
@@ -245,6 +262,9 @@ def principal():
             mensagens.append(f"🔥 *ALERTA DE QUEIMADA DETECTADO!*\n• Mais próximo: a *{mp['d']}km* da propriedade.")
             if iv:
                 mensagens.append(f"• Propagação do Vento: *{iv['vel']:.1f}km/h* afundando para *{iv['dest']}*")
+            url_mapa = publicar_mapa(fz, focos, iv, iv["t"] if iv else 0, iv["u"] if iv else 0)
+            if url_mapa:
+                mensagens.append(f"• 🗺️ *Mapa Tático Satélite:* {url_mapa}")
             lm = link(["www", "google", "com"], ["maps"])
             for i, fc in enumerate(focos[:3], 1):
                 mensagens.append(f"• Mapa Foco {i} ({fc['d']}km): {lm}?q={fc['lat']},{fc['lon']}")
@@ -262,7 +282,7 @@ def principal():
         else:
             print(f"🛡️ {fz['nome']}: Área segura.")
 
-
 if __name__ == "__main__":
     principal()
 # FIM_DO_CODIGO
+
