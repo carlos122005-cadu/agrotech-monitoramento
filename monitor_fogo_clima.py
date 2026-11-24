@@ -28,7 +28,10 @@ NOME_FAZENDA = os.getenv("NOME_FAZENDA", "Fazenda Piloto - Cordeiro/RJ")
 
 
 def montar_url(dominio, caminho):
-    return "https:" + "//" + dominio + "/" + caminho
+    sep = chr(47)
+    dom = dominio.strip().strip(sep)
+    cam = caminho.strip().lstrip(sep)
+    return f"https:{sep}{sep}{dom}{sep}{cam}"
 
 
 def calcular_distancia_km(lat1, lon1, lat2, lon2):
@@ -80,8 +83,8 @@ def consultar_clima():
         temp = float(atual["temperature_2m"])
         umid = float(atual["relative_humidity_2m"])
         vento = float(atual["wind_speed_10m"])
-        chuva_hoje = float(daily["precipitation_sum"][0])
-        temp_min = float(daily["temperature_2m_min"][0])
+        chuva_hoje = float(daily["precipitation_sum"])
+        temp_min = float(daily["temperature_2m_min"])
 
         status_pulv, _ = avaliar_pulverizacao(temp, umid, vento, 0)
         melhor_hora, melhor_score = "Sem janela ideal nas próximas 24h", 0
@@ -93,7 +96,7 @@ def consultar_clima():
             _, score = avaliar_pulverizacao(ht, hu, hv, hp)
             if score > melhor_score:
                 melhor_score = score
-                hf = hourly["time"][i].split("T")[1]
+                hf = hourly["time"][i].split("T")
                 melhor_hora = f"{hf} ({ht:.0f}°C | Vento {hv:.0f} km/h | Umid. {hu:.0f}%)"
 
         return {
@@ -165,7 +168,7 @@ def main():
     focos = verificar_focos(clima["chuva_hoje"] if clima else 0.0)
 
     if focos:
-        f0 = focos[0]
+        f0 = focos
         link = montar_url("://google.com", "maps") + f"?q={f0['lat']},{f0['lon']}"
         bloco_fogo = f"🚨 *ALERTA DE FOCO DE CALOR!*\n• Total ({RAIO_KM:.0f} km): {len(focos)}\n• Mais próximo: *{f0['dist']} km*\n• Mapa: {link}"
     elif clima and clima["risco_30"]:
@@ -197,4 +200,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
+        
