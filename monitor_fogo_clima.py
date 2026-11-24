@@ -120,7 +120,7 @@ def enviar_wpp(tel, chave, msg):
             params={"phone": tel, "text": msg, "apikey": chave},
             timeout=25
         )
-        print(f"📲 WhatsApp enviado!" if r.status_code == 200 else f"❌ Erro WPP: {r.status_code}")
+        print("📲 WhatsApp enviado!" if r.status_code == 200 else f"❌ Erro WPP: {r.status_code}")
         return r.status_code == 200
     except Exception as e:
         print(f"❌ Falha WPP: {e}")
@@ -231,4 +231,17 @@ def principal():
             chave = chave or f"CLIMA_{agora.strftime('%Y%m%d')}"
 
         if ev == "workflow_dispatch" or (agora.hour == 6 and agora.minute < 30):
-    
+
+                        cab = "\n".join(mensagens) if mensagens else f"🛡️ Área Segura: Nenhum foco de calor no raio de {fz['raio']}km."
+            enviar_wpp(fz["tel"], fz["chave"], f"🌾 *VECTORX AGRO — {fz['nome'].upper()}*\n{astr}\n\n{cab}\n\n{rc}")
+        elif mensagens:
+            if not ja_alertado(fz["id"], chave):
+                if enviar_wpp(fz["tel"], fz["chave"], f"🚨 *EMERGÊNCIA VECTORX AGRO — {fz['nome'].upper()}*\n{astr}\n\n" + "\n".join(mensagens) + f"\n\n{rc}"):
+                    salvar_alerta(fz["id"], chave)
+        else:
+            print(f"🛡️ {fz['nome']}: Área segura.")
+
+
+if __name__ == "__main__":
+    principal()
+# FIM_DO_CODIGO
