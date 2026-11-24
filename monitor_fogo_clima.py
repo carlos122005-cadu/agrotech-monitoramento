@@ -126,14 +126,12 @@ def enviar_wpp(tel, chave, msg):
     except Exception as e:
         print(f"❌ Falha WPP: {e}")
         return False
-
-
-def ver_clima(lat, lon, agora):
+     def ver_clima(lat, lon, agora):
     u = f"{link(['api', 'open-meteo', 'com'], ['v1', 'forecast'])}?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,wind_speed_10m,wind_direction_10m,precipitation&hourly=temperature_2m,relative_humidity_2m,wind_speed_10m,precipitation,precipitation_probability&timezone=America%2FSao_Paulo&forecast_days=2"
     dados = None
     for _ in range(2):
         try:
-            r = requests.get(u, headers={"User-Agent": "VectorXAgro/1.0"}, timeout=25)
+            r = requests.get(u, headers={"User-Agent": "VectorXAgro/1.0"}, timeout=20)
             if r.status_code == 200 and r.text.strip():
                 dados = r.json()
                 break
@@ -141,14 +139,20 @@ def ver_clima(lat, lon, agora):
             time.sleep(2)
     if not dados:
         try:
-            fb = requests.get(f"https://wttr.in{lat},{lon}?format=j1", headers={"User-Agent": "VectorXAgro/1.0"}, timeout=15).json()
-            atual = next(iter(fb.get("current_condition", [])))
-            t, u_ar, v = float(atual["temp_C"]), float(atual["humidity"]), float(atual["windspeedKmph"])
-            dv, ch = float(atual["winddirDegree"]), float(atual["precipMM"])
+    u_met = f"{link(['api', 'met', 'no'], ['weatherapi', 'locationforecast', '2.0', 'compact'])}?lat={lat:.4f}&lon={lon:.4f}"
+    
+            fb = requests.get(u_met, headers={"User-Agent": "VectorXAgro/1.0 ://github.com"}, timeout=20).json()
+            serie = fb["properties"]["timeseries"]
+            atual = next(iter(serie))["data"]["instant"]["details"]
+            t = float(atual.get("air_temperature", 0))
+            u_ar = float(atual.get("relative_humidity", 0))
+            v = float(atual.get("wind_speed", 0)) * 3.6
+            dv = float(atual.get("wind_from_direction", 0))
+            ch = float(next(iter(serie))["data"].get("next_1_hours", {}).get("details", {}).get("precipitation_amount", 0))
             destino = dir_vento(dv)
             st_p, _ = eval_pulv(t, u_ar, v, ch, 20.0)
             res = (
-                f"🌡️ Temp: {t:.1f}°C | 💧 Umid: {u_ar:.0f}% (Fonte Reserva)\n"
+                f"🌡️ Temp: {t:.1f}°C | 💧 Umid: {u_ar:.0f}% (Satélite MET)\n"
                 f"💨 Vento: {v:.1f}km/h (indo p/ {destino})\n"
                 f"🌧️ Chuva: {ch:.1f}mm\n"
                 f"🚜 *Pulverização/Adubo:* {st_p}\n"
