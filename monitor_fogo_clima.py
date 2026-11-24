@@ -3,6 +3,7 @@ import math
 import requests
 import pandas as pd
 from io import StringIO
+from urllib.parse import urlunparse
 from datetime import datetime, timezone, timedelta
 
 NASA_FIRMS_KEY = (os.getenv("NASA_FIRMS_KEY") or os.getenv("FIRMS_MAP_KEY") or "").strip()
@@ -28,10 +29,7 @@ NOME_FAZENDA = os.getenv("NOME_FAZENDA", "Fazenda Piloto - Cordeiro/RJ")
 
 
 def montar_url(dominio, caminho):
-    sep = chr(47)
-    dom = dominio.strip().strip(sep)
-    cam = caminho.strip().lstrip(sep)
-    return f"https:{sep}{sep}{dom}{sep}{cam}"
+    return urlunparse(("https", dominio.strip(), "/" + caminho.strip().lstrip("/"), "", "", ""))
 
 
 def calcular_distancia_km(lat1, lon1, lat2, lon2):
