@@ -231,8 +231,7 @@ def principal():
             chave = chave or f"CLIMA_{agora.strftime('%Y%m%d')}"
 
         if ev == "workflow_dispatch" or (agora.hour == 6 and agora.minute < 30):
-
-                        cab = "\n".join(mensagens) if mensagens else f"🛡️ Área Segura: Nenhum foco de calor no raio de {fz['raio']}km."
+            cab = "\n".join(mensagens) if mensagens else f"🛡️ Área Segura: Nenhum foco de calor no raio de {fz['raio']}km."
             enviar_wpp(fz["tel"], fz["chave"], f"🌾 *VECTORX AGRO — {fz['nome'].upper()}*\n{astr}\n\n{cab}\n\n{rc}")
         elif mensagens:
             if not ja_alertado(fz["id"], chave):
