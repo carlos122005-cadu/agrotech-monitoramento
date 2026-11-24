@@ -49,20 +49,20 @@ def buscar_fazendas():
 def calcular_ndvi_sentinel(lat, lon):
     stac_url = link(["earth-search", "aws", "element84", "com"], ["v1", "search"])
     fim = datetime.now(timezone.utc)
-    ini = fim - timedelta(days=30)
+    ini = fim - timedelta(days=60)
     bbox = [lon - 0.008, lat - 0.008, lon + 0.008, lat + 0.008]
     payload = {
         "collections": ["sentinel-2-l2a"],
         "bbox": bbox,
         "datetime": f"{ini.strftime('%Y-%m-%dT00:00:00Z')}/{fim.strftime('%Y-%m-%dT23:59:59Z')}",
-        "query": {"eo:cloud_cover": {"lt": 35}},
+        "query": {"eo:cloud_cover": {"lt": 45}},
         "limit": 3
     }
     try:
         r = requests.post(stac_url, json=payload, timeout=25)
         feats = r.json().get("features", [])
         if not feats:
-            return None, "Nuvens densas nos últimos 30 dias (sem cena limpa)."
+            return None, "Nuvens densas nos últimos 60 dias (sem cena limpa)."
         cena = next(iter(feats))
         data_img = cena["properties"].get("datetime", "")[:10]
         assets = cena.get("assets", {})
