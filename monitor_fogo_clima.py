@@ -229,7 +229,7 @@ def principal():
         if not df.empty:
             for _, linha in df.iterrows():
                 if str(linha.get("confidence", "")).lower() != "l" and float(linha.get("frp", 0)) >= 2.0:
-                        d = dist_km(fz["lat"], fz["lon"], float(linha["latitude"]), float(linha["longitude"]))
+                    d = dist_km(fz["lat"], fz["lon"], float(linha["latitude"]), float(linha["longitude"]))
                     if d <= fz["raio"]:
                         focos.append({"lat": float(linha["latitude"]), "lon": float(linha["longitude"]), "d": round(d, 2)})
         focos.sort(key=lambda x: x["d"])
