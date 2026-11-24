@@ -46,54 +46,77 @@ def buscar_fazendas():
         return []
 
 
+def ler_cena(cena, bbox):
+    assets = cena.get("assets", {})
+    url_red = assets.get("red", {}).get("href")
+    url_nir = assets.get("nir", {}).get("href")
+    if not url_red or not url_nir:
+        return None
+    with rasterio.open(url_red) as src_r:
+        b_proj = transform_bounds("EPSG:4326", src_r.crs, *bbox)
+        win = from_bounds(*b_proj, src_r.transform)
+        red = src_r.read(1, window=win).astype("float32")
+    with rasterio.open(url_nir) as src_n:
+        nir = src_n.read(1, window=win).astype("float32")
+    soma = nir + red
+    ndvi = np.where(soma > 0, (nir - red) / soma, np.nan)
+    return round(float(np.nanmean(ndvi)), 2)
+
+
 def calcular_ndvi_sentinel(lat, lon):
     stac_url = link(["earth-search", "aws", "element84", "com"], ["v1", "search"])
     fim = datetime.now(timezone.utc)
-    ini = fim - timedelta(days=60)
+    ini = fim - timedelta(days=75)
     bbox = [lon - 0.008, lat - 0.008, lon + 0.008, lat + 0.008]
     payload = {
         "collections": ["sentinel-2-l2a"],
         "bbox": bbox,
         "datetime": f"{ini.strftime('%Y-%m-%dT00:00:00Z')}/{fim.strftime('%Y-%m-%dT23:59:59Z')}",
         "query": {"eo:cloud_cover": {"lt": 45}},
-        "limit": 3
+        "limit": 4
     }
     try:
         r = requests.post(stac_url, json=payload, timeout=25)
         feats = r.json().get("features", [])
         if not feats:
-            return None, "Nuvens densas nos últimos 60 dias (sem cena limpa)."
-        cena = next(iter(feats))
-        data_img = cena["properties"].get("datetime", "")[:10]
-        assets = cena.get("assets", {})
-        url_red = assets.get("red", {}).get("href")
-        url_nir = assets.get("nir", {}).get("href")
-        if not url_red or not url_nir:
-            return None, "Bandas espectrais indisponíveis nesta passagem."
-
-        with rasterio.open(url_red) as src_r:
-            b_proj = transform_bounds("EPSG:4326", src_r.crs, *bbox)
-            win = from_bounds(*b_proj, src_r.transform)
-            red = src_r.read(1, window=win).astype("float32")
-        with rasterio.open(url_nir) as src_n:
-            nir = src_n.read(1, window=win).astype("float32")
-
-        soma = nir + red
-        ndvi = np.where(soma > 0, (nir - red) / soma, np.nan)
-        media = float(np.nanmean(ndvi))
-        return round(media, 2), data_img
+            return None, None, "Céu encoberto nas últimas semanas (aguardando abertura)."
+        atual = next(iter(feats))
+        dt_raw = atual["properties"].get("datetime", "")[:10]
+        dt_br = "/".join(reversed(dt_raw.split("-"))) if "-" in dt_raw else dt_raw
+        val_atual = ler_cena(atual, bbox)
+        val_ant = None
+        if len(feats) >= 2:
+            val_ant = ler_cena(list(feats).pop(1), bbox)
+        return val_atual, val_ant, dt_br
     except Exception as e:
-        return None, f"Falha satélite: {str(e)[:60]}"
+        return None, None, f"Falha satélite: {str(e)[:50]}"
 
 
-def avaliar_pasto(ndvi):
+def montar_diagnostico(ndvi, ant):
     if ndvi is None:
-        return "☁️ *Status:* Aguardando abertura de nuvens para leitura óptica."
+        return "☁️ *Situação:* Nuvens sobre a região impediram a foto limpa do satélite esta semana."
+    nota = max(0.0, min(10.0, round(ndvi * 10, 1)))
+    tend = ""
+    if ant is not None:
+        diff = round((ndvi - ant) * 10, 1)
+        if diff >= 0.3:
+            tend = f"📈 *Tendência:* Melhorando (+{diff} pts desde a última foto)\n"
+        elif diff <= -0.3:
+            tend = f"📉 *Tendência:* Caindo ({diff} pts desde a última foto)\n"
+        else:
+            tend = "➡️ *Tendência:* Estável em relação à última leitura\n"
+
     if ndvi >= 0.60:
-        return "🟢 *Pasto Excelente (Vigor Alto):* Ótima oferta de massa verde e fotossíntese ativa."
-    if ndvi >= 0.40:
-        return "🟡 *Pasto Moderado (Atenção):* Vigor médio. Avaliar lotação dos piquetes ou adubação de cobertura."
-    return "🔴 *Pasto Degradado / Seco (Alerta):* Baixo vigor verde. Risco de perda de suporte forrageiro."
+        st = "🟢 *Pasto Verde e Cheio (Excelente)*"
+        acao = "Boa oferta de capim para o rebanho. Mantenha o rodízio normal dos piquetes."
+    elif ndvi >= 0.40:
+        st = "🟡 *Pasto Médio (Atenção)*"
+        acao = "Capim começando a perder força. Vale observar a lotação e planejar adubação ou descanso do piquete."
+    else:
+        st = "🔴 *Pasto Seco / Ralo (Alerta)*"
+        acao = "Pouca folha verde disponível. Recomendado aliviar o pasto, dar descanso ao piquete ou reforçar o cocho (silagem/ração)."
+
+    return f"🌱 *Nota do Pasto:* *{nota:.1f} / 10* (Índice {ndvi:.2f})\n{tend}{st}\n💡 *Na prática:* {acao}"
 
 
 def enviar_wpp(tel, chave, msg):
@@ -107,15 +130,14 @@ def principal():
     agora = datetime.now(timezone(timedelta(hours=-3)))
     faz = buscar_fazendas() or [{"nome": "Fazenda Piloto - Cordeiro/RJ", "lat": F_LAT, "lon": F_LON, "tel": F_PHONE, "chave": F_APIKEY}]
     for fz in faz:
-        ndvi, info = calcular_ndvi_sentinel(fz["lat"], fz["lon"])
-        diag = avaliar_pasto(ndvi)
-        val_txt = f"*{ndvi:.2f}* (Imagem Sentinel-2 de {info})" if ndvi is not None else info
+        ndvi, ant, info = calcular_ndvi_sentinel(fz["lat"], fz["lon"])
+        corpo = montar_diagnostico(ndvi, ant)
+        cab_foto = f"📸 *Última foto limpa:* {info}\n\n" if ndvi is not None else f"{info}\n\n"
         msg = (
-            f"🛰️ *BOLETIM DE PASTAGEM — {fz['nome'].upper()}*\n"
-            f"Data: {agora.strftime('%d/%m/%Y')}\n\n"
-            f"🌿 *Índice de Vigor (NDVI):* {val_txt}\n"
-            f"{diag}\n\n"
-            f"_Monitoramento Orbital VectorX Agro • Cordeiro/RJ_"
+            f"🛰️ *RAIO-X DO PASTO — {fz['nome'].upper()}*\n"
+            f"Relatório Semanal • {agora.strftime('%d/%m/%Y')}\n\n"
+            f"{cab_foto}{corpo}\n\n"
+            f"_Satélite Sentinel-2 • VectorX Agro_"
         )
         enviar_wpp(fz["tel"], fz["chave"], msg)
 
