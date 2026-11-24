@@ -4,127 +4,67 @@ import requests
 import pandas as pd
 from io import StringIO
 from datetime import datetime, timezone, timedelta
-from urllib.parse import urlunparse
 
-# =====================================================================
-# CONFIGURAÇÕES DA PROPRIEDADE
-# =====================================================================
-NOME_FAZENDA = (os.getenv("NOME_FAZENDA") or "Fazenda Piloto Cordeiro").strip()
-LATITUDE = float((os.getenv("FAZENDA_LAT") or "-22.0286").strip().replace(",", "."))
-LONGITUDE = float((os.getenv("FAZENDA_LON") or "-42.3611").strip().replace(",", "."))
-RAIO_KM = float((os.getenv("RAIO_ALERTA_KM") or "15.0").strip().replace(",", "."))
+# ==============================================================================
+# CONFIGURAÇÕES E SECRETS (Lidas do GitHub Actions)
+# ==============================================================================
+NASA_FIRMS_KEY = os.getenv("NASA_FIRMS_KEY", "").strip()
+WHATSAPP_TELEFONE = os.getenv("WHATSAPP_TELEFONE", "").strip()
+WHATSAPP_APIKEY = os.getenv("WHATSAPP_APIKEY", "").strip()
 
-NASA_FIRMS_KEY = (os.getenv("NASA_FIRMS_KEY") or "").strip().lstrip(":")
-WHATSAPP_PHONE = (os.getenv("WHATSAPP_PHONE") or "").strip()
-WHATSAPP_APIKEY = (os.getenv("WHATSAPP_APIKEY") or "").strip()
-
-# Horários do boletim diário de rotina (Horário de Brasília: 06h e 17h)
-HORARIOS_BOLETIM = [6, 17]
+# Coordenadas padrão (Cordeiro/RJ) caso não estejam nas Secrets
+LATITUDE = float(os.getenv("LATITUDE", "-22.0286"))
+LONGITUDE = float(os.getenv("LONGITUDE", "-42.3611"))
+RAIO_KM = float(os.getenv("RAIO_KM", "15.0"))
+NOME_FAZENDA = os.getenv("NOME_FAZENDA", "Fazenda Piloto - Cordeiro/RJ")
 
 
-def montar_url(dominio, *partes):
-    dominio_limpo = dominio.strip(".")
-    caminho = chr(47) + chr(47).join(str(p).strip(chr(47)) for p in partes)
-    return urlunparse(("https", dominio_limpo, caminho, "", "", ""))
+def montar_url(*partes) -> str:
+    return "https://" + "/".join(p.strip("/") for p in partes)
 
 
-def direcao_cardeal(graus):
-    pontos = [
-        "Norte", "Nordeste", "Leste", "Sudeste",
-        "Sul", "Sudoeste", "Oeste", "Noroeste"
-    ]
-    idx = round(graus / 45) % 8
-    return pontos[idx]
-
-
-def calcular_distancia_km(lat1, lon1, lat2, lon2):
+def calcular_distancia_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     r = 6371.0
-    p1, p2 = math.radians(lat1), math.radians(lat2)
-    dp = math.radians(lat2 - lat1)
-    dl = math.radians(lon2 - lon1)
-    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
-    return r * (2 * math.atan2(math.sqrt(a), math.sqrt(1 - a)))
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    return 2 * r * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
-def avaliar_conforto_gado(temp, umid):
-    # Cálculo interno do índice térmico traduzido para linguagem simples do campo
+def avaliar_condicao_pulverizacao(temp: float, umid: float, vento: float, prob_chuva: float) -> tuple[str, int]:
+    """Retorna (Status textual, Pontuação de 0 a 100 para achar a melhor janela)."""
+    if prob_chuva >= 50 or vento > 15 or umid < 45 or temp > 32:
+        return "🔴 NÃO APLICAR (Risco de deriva, evaporação ou lavagem)", 10
+    if 10 <= vento <= 15 or 45 <= umid < 55 or 28 < temp <= 32 or vento < 3:
+        return "🟡 CAUTELA (Atenção ao vento/umidade; preferir horário ameno)", 60
+    return "🟢 IDEAL (Condições ótimas para pulverização e adubação)", 100
+
+
+def avaliar_conforto_rebanho(temp: float, umid: float) -> str:
+    """Calcula ITU internamente e traduz para linguagem prática de campo."""
     itu = 0.8 * temp + (umid / 100.0) * (temp - 14.4) + 46.4
-    if itu < 72:
-        return "🟢 *Confortável* — Clima agradável, sem estresse por calor para o rebanho."
-    elif itu < 79:
-        return "🟡 *Atenção Leve* — Calor moderado; manter água limpa e sombra disponível."
-    elif itu < 89:
-        return "🟠 *Alerta de Calor* — Estresse térmico; evitar manejo pesado no curral agora."
-    else:
-        return "🔴 *Perigo de Calor Extremo* — Risco alto para o gado; priorizar sombra e hidratação."
+    if itu >= 84:
+        return "🚨 ALERTA CRÍTICO DE CALOR: Risco severo ao gado. Garantir sombra imediata, água fresca à vontade e NÃO movimentar lotes."
+    if itu >= 78:
+        return "🟠 DESCONFORTO TÉRMICO: Queda provável no leite/ganho de peso. Manter rebanho em piquetes com sombra e evitar manejo no curral nas horas quentes."
+    if itu >= 72:
+        return "🟡 ATENÇÃO LEVE: Calor moderado. Manter bebedouros cheios e fazer manejo de curral preferencialmente no início da manhã."
+    return "🟢 CONFORTO IDEAL: Clima favorável para o rebanho e rotina normal de manejo."
 
 
-def avaliar_pulverizacao_agora(temp, umid, vento, chuva):
-    if chuva > 0.2:
-        return (
-            "🔴 *NÃO APLICAR AGORA*\n"
-            "• *Motivo:* Há chuva no momento — o produto será lavado da folha."
-        )
-    if vento > 15:
-        return (
-            "🔴 *NÃO APLICAR AGORA*\n"
-            f"• *Motivo:* Vento forte ({vento:.1f} km/h) — alto risco de deriva e perda do produto."
-        )
-    if vento < 3:
-        return (
-            "🔴 *NÃO APLICAR AGORA*\n"
-            f"• *Motivo:* Vento parado ({vento:.1f} km/h) — risco de inversão térmica (gotas ficam suspensas no ar)."
-        )
-    if umid < 45 or temp > 32:
-        return (
-            "🔴 *NÃO APLICAR AGORA*\n"
-            f"• *Motivo:* Ar muito seco ({umid}%) ou quente ({temp:.1f}°C) — gota evapora antes de agir."
-        )
-    if (10 < vento <= 15) or (45 <= umid < 55) or (29 < temp <= 32):
-        return (
-            "🟡 *APLICAR COM CAUTELA*\n"
-            "• *Motivo:* Condição no limite — usar ponta de gota grossa e redobrar atenção na deriva."
-        )
-    return (
-        "🟢 *CONDIÇÃO IDEAL PARA APLICAR*\n"
-        "• *Motivo:* Temperatura, umidade e vento dentro da faixa segura para boa cobertura."
-    )
-
-
-def encontrar_melhor_janela(hourly):
-    tempos = hourly.get("time", [])
-    temps = hourly.get("temperature_2m", [])
-    umids = hourly.get("relative_humidity_2m", [])
-    ventos = hourly.get("wind_speed_10m", [])
-    chuvas = hourly.get("precipitation", [])
-
-    horas_boas = []
-    for i in range(min(24, len(tempos))):
-        t = temps[i]
-        u = umids[i]
-        v = ventos[i]
-        c = chuvas[i]
-        if c <= 0.1 and (3 <= v <= 12) and (u >= 55) and (t <= 30):
-            hora_str = tempos[i].split("T")[1][:5]
-            horas_boas.append(hora_str)
-
-    if not horas_boas:
-        return "Nenhuma janela 100% ideal nas próximas 24h (monitorar vento e chuva)."
-    if len(horas_boas) == 1:
-        return f"Por volta das *{horas_boas[0]}*"
-    return f"Entre *{horas_boas[0]}* e *{horas_boas[-1]}* (nas próximas 24h)"
-
-
-def consultar_clima_completo():
-    url = montar_url("api." + "open-meteo.com", "v1", "forecast")
+def consultar_clima_completo() -> dict | None:
+    url = montar_url("://open-meteo.com", "v1", "forecast")
     params = {
         "latitude": LATITUDE,
         "longitude": LONGITUDE,
-        "current": "temperature_2m,relative_humidity_2m,wind_speed_10m,wind_direction_10m,precipitation",
-        "hourly": "temperature_2m,relative_humidity_2m,wind_speed_10m,precipitation",
+        "current": "temperature_2m,relative_humidity_2m,precipitation,wind_speed_10m",
+        "hourly": "temperature_2m,relative_humidity_2m,precipitation_probability,precipitation,wind_speed_10m",
+        "daily": "precipitation_sum,temperature_2m_min",
+        "timezone": "America/Sao_Paulo",
         "forecast_days": 2,
-        "timezone": "America" + chr(47) + "Sao_Paulo"
     }
+
     try:
         resp = requests.get(url, params=params, timeout=20)
         if resp.status_code != 200:
@@ -132,137 +72,172 @@ def consultar_clima_completo():
             return None
 
         dados = resp.json()
-        atual = dados.get("current", {})
-        hourly = dados.get("hourly", {})
+        atual = dados["current"]
+        hourly = dados["hourly"]
+        daily = dados["daily"]
 
-        temp = float(atual.get("temperature_2m", 0))
-        umid = float(atual.get("relative_humidity_2m", 0))
-        vento = float(atual.get("wind_speed_10m", 0))
-        direcao = float(atual.get("wind_direction_10m", 0))
-        chuva = float(atual.get("precipitation", 0))
+        temp = float(atual["temperature_2m"])
+        umid = float(atual["relative_humidity_2m"])
+        vento = float(atual["wind_speed_10m"])
+        chuva_hoje = float(daily["precipitation_sum"][0])
+        temp_min_amanha = float(daily["temperature_2m_min"][1])
 
-        chuvas_prox = hourly.get("precipitation", [])[:3]
-        chuva_3h = sum(chuvas_prox) if chuvas_prox else 0.0
+        # Regra 30-30-30 simultânea (Temp > 30°C, Umidade < 30%, Vento > 30 km/h)
+        risco_30_30_30 = (temp >= 30.0) and (umid <= 30.0) and (vento >= 30.0)
+        risco_geada = temp_min_amanha <= 3.0
 
-        risco_fogo_clima = (temp > 30 and umid < 30 and vento > 30) or (umid < 25)
+        # Avalia momento atual e busca melhor janela nas próximas 24 horas
+        status_pulv, _ = avaliar_condicao_pulverizacao(temp, umid, vento, 0)
+        conforto_gado = avaliar_conforto_rebanho(temp, umid)
+
+        melhor_hora = "Sem janela ideal nas próximas 24h"
+        melhor_score = 0
+        for i in range(min(24, len(hourly["time"]))):
+            h_temp = float(hourly["temperature_2m"][i])
+            h_umid = float(hourly["relative_humidity_2m"][i])
+            h_vento = float(hourly["wind_speed_10m"][i])
+            h_prob = float(hourly["precipitation_probability"][i] or 0)
+            _, score = avaliar_condicao_pulverizacao(h_temp, h_umid, h_vento, h_prob)
+            if score > melhor_score:
+                melhor_score = score
+                hora_fmt = hourly["time"][i].split("T")[1]
+                melhor_hora = f"{hora_fmt} ({h_temp:.0f}°C | Vento {h_vento:.0f} km/h | Umid. {h_umid:.0f}%)"
 
         return {
             "temp": temp,
             "umid": umid,
             "vento": vento,
-            "direcao_texto": direcao_cardeal(direcao),
-            "chuva": chuva,
-            "chuva_3h": chuva_3h,
-            "pulverizacao": avaliar_pulverizacao_agora(temp, umid, vento, chuva),
-            "melhor_janela": encontrar_melhor_janela(hourly),
-            "gado": avaliar_conforto_gado(temp, umid),
-            "risco_fogo_clima": risco_fogo_clima
+            "chuva_hoje": chuva_hoje,
+            "status_pulv": status_pulv,
+            "melhor_janela": melhor_hora,
+            "conforto_gado": conforto_gado,
+            "risco_30_30_30": risco_30_30_30,
+            "risco_geada": risco_geada,
+            "temp_min_amanha": temp_min_amanha,
         }
     except Exception as e:
-        print(f"Erro ao consultar clima: {e}")
+        print(f"❌ Erro ao consultar Open-Meteo: {e}")
         return None
 
 
-def verificar_focos_calor():
+def verificar_focos_calor(chuva_recente_mm: float = 0.0) -> list[dict]:
     if not NASA_FIRMS_KEY:
-        print("⚠️ NASA_FIRMS_KEY não configurada.")
+        print("⚠️ NASA_FIRMS_KEY não configurada nas Secrets.")
         return []
 
-    delta = RAIO_KM / 111.0
-    area = f"{LONGITUDE - delta:.4f},{LATITUDE - delta:.4f},{LONGITUDE + delta:.4f},{LATITUDE + delta:.4f}"
+    # Área aproximada cobrindo Sudeste/Brasil para consulta rápida e leve
+    area_coords = f"{LONGITUDE - 1.0},{LATITUDE - 1.0},{LONGITUDE + 1.0},{LATITUDE + 1.0}"
     url = montar_url(
         "firms.modaps.eosdis.nasa.gov",
-        "api", "area", "csv",
+        "api",
+        "area",
+        "csv",
         NASA_FIRMS_KEY,
         "VIIRS_SNPP_NRT",
-        area,
-        "1"
+        area_coords,
+        "1",
     )
 
     try:
         resp = requests.get(url, timeout=25)
         if resp.status_code != 200:
-            print(f"⚠️ Erro HTTP NASA FIRMS ({resp.status_code})")
+            print(f"⚠️ Erro HTTP NASA FIRMS: {resp.status_code}")
             return []
 
         df = pd.read_csv(StringIO(resp.text))
         if df.empty:
-            print("🛰️ Satélite NASA FIRMS consultado com sucesso: 0 focos na área.")
+            print("🛰️ Satélite NASA FIRMS: 0 focos na região.")
             return []
 
         focos = []
-        for _, row in df.iterrows():
-            dist = calcular_distancia_km(LATITUDE, LONGITUDE, float(row["latitude"]), float(row["longitude"]))
+        for _, linha in df.iterrows():
+            confianca = str(linha.get("confidence", "")).lower()
+            frp = float(linha.get("frp", 0.0))
+
+            # Filtros de qualidade definidos na arquitetura VectorX
+            if confianca == "l" or frp < 2.0 or chuva_recente_mm >= 10.0:
+                continue
+
+            dist = calcular_distancia_km(
+                LATITUDE, LONGITUDE, float(linha["latitude"]), float(linha["longitude"])
+            )
             if dist <= RAIO_KM:
                 focos.append({
-                    "lat": row["latitude"],
-                    "lon": row["longitude"],
+                    "lat": float(linha["latitude"]),
+                    "lon": float(linha["longitude"]),
                     "distancia_km": round(dist, 2),
-                    "confianca": row["confidence"]
+                    "frp": frp,
+                    "confianca": confianca,
                 })
+
         focos.sort(key=lambda x: x["distancia_km"])
         return focos
     except Exception as e:
-        print(f"Erro ao consultar NASA FIRMS: {e}")
+        print(f"❌ Erro ao consultar NASA FIRMS: {e}")
         return []
 
 
-def enviar_whatsapp(mensagem: str):
-    if not WHATSAPP_PHONE or not WHATSAPP_APIKEY:
-        print("⚠️ WhatsApp não configurado. Exibindo boletim no log:")
+def enviar_whatsapp(mensagem: str) -> bool:
+    if not WHATSAPP_TELEFONE or not WHATSAPP_APIKEY:
+        print("⚠️ Credenciais do WhatsApp ausentes. Exibindo boletim apenas no log:\n")
         print(mensagem)
-        return
+        return False
 
-    url = montar_url("api." + "callmebot.com", "whatsapp.php")
+    url = montar_url("://callmebot.com", "whatsapp.php")
     params = {
-        "phone": WHATSAPP_PHONE,
+        "phone": WHATSAPP_TELEFONE,
         "text": mensagem,
-        "apikey": WHATSAPP_APIKEY
+        "apikey": WHATSAPP_APIKEY,
     }
+
     try:
         resp = requests.get(url, params=params, timeout=20)
         if resp.status_code == 200:
             print("✅ Boletim enviado com sucesso para o WhatsApp!")
-        else:
-            print(f"❌ Erro ao enviar WhatsApp ({resp.status_code}): {resp.text}")
+            return True
+        print(f"❌ Erro CallMeBot ({resp.status_code}): {resp.text}")
+        return False
     except Exception as e:
-        print(f"❌ Falha de conexão WhatsApp: {e}")
+        print(f"❌ Falha de conexão com WhatsApp: {e}")
+        return False
 
 
 def executar_sentinela():
-    fuso_brt = timezone(timedelta(hours=-3))
-    agora_brt = datetime.now(fuso_brt)
-    data_hora_str = agora_brt.strftime("%d" + chr(47) + "%m" + chr(47) + "%Y • %H:%M (Brasília)")
-    evento_github = (os.getenv("GITHUB_EVENT_NAME") or "").strip()
+    fuse_brt = timezone(timedelta(hours=-3))
+    agora_brt = datetime.now(fuse_brt)
+    data_hora_str = agora_brt.strftime("%d/%m/%Y às %H:%M (Brasília)")
+    evento_github = os.getenv("GITHUB_EVENT_NAME", "").strip()
 
-    print(f"🚜 VectorX Agro | Varredura iniciada em {data_hora_str} (Evento: {evento_github})")
+    print(f"🛰️ VectorX Agro | Varredura iniciada em {data_hora_str} | Evento: {evento_github}")
 
     clima = consultar_clima_completo()
-    focos = verificar_focos_calor()
+    chuva_atual = clima["chuva_hoje"] if clima else 0.0
+    focos = verificar_focos_calor(chuva_atual)
 
-    # Bloco de Fogo
+    # 1. Bloco de Fogo e Riscos Extremos
     if focos:
-        foco_mais_proximo = focos[0]
-        link_foco = montar_url("://google.com", "") + f"?q={foco_mais_proximo['lat']},{foco_mais_proximo['lon']}"
+        mais_proximo = focos[0]
+        link_fogo = montar_url("://google.com", "maps") + f"?q={mais_proximo['lat']},{mais_proximo['lon']}"
         bloco_fogo = (
-            f"🔴 *ALERTA DE FOGO DETECTADO!*\n"
-            f"• Foram encontrados *{len(focos)} foco(s)* no raio de {RAIO_KM:.0f} km.\n"
-            f"• *Mais próximo:* a *{foco_mais_proximo['distancia_km']} km* da propriedade.\n"
-            f"• *Local exato do fogo:* {link_foco}"
+            f"🚨 *ALERTA DE FOCO DE CALOR DETECTADO!*\n"
+            f"• *Total no raio de {RAIO_KM:.0f} km:* {len(focos)} foco(s)\n"
+            f"• *Mais próximo:* a *{mais_proximo['distancia_km']} km* da propriedade\n"
+            f"• *Local exato no mapa:* {link_fogo}"
         )
-    elif clima and clima["risco_fogo_clima"]:
+    elif clima and clima.get("risco_30_30_30"):
         bloco_fogo = (
-            "🟠 *ATENÇÃO: RISCO CLIMÁTICO DE INCÊNDIO*\n"
-            "• Sem focos por satélite agora, mas o tempo seco e quente favorece queimadas."
+            "🔥 *ATENÇÃO: RISCO EXTREMO DE INCÊNDIO (30-30-30)*\n"
+            "• Sem focos por satélite agora, mas calor (>30°C), ar seco (<30%) e vento forte (>30 km/h) favorecem queimadas."
         )
     else:
-        bloco_fogo = (
-            f"🟢 *Área Segura* — Nenhum foco de calor detectado por satélite num raio de {RAIO_KM:.0f} km."
-        )
+        bloco_fogo = f"🛡️ *Área Segura:* Nenhum foco de calor detectado por satélite num raio de {RAIO_KM:.0f} km."
 
-    # Bloco de Clima, Pulverização e Rebanho
+    if clima and clima.get("risco_geada"):
+        bloco_fogo += f"\n❄️ *ALERTA DE GEADA:* Mínima prevista de {clima['temp_min_amanha']:.1f}°C nas próximas 24h!"
+
+    # 2. Bloco de Clima, Adubação/Pulverização e Rebanho
     if clima:
         bloco_clima = (
-            f"• *Temperatura:* {clima['temp']:.1f}°C\n"
-            f"• *Umidade do Ar:* {clima['umid']:.0f}%\n"
-    
+            f"🌡️ *Temperatura:* {clima['temp']:.1f}°C  |  💧 *Umidade:* {clima['umid']:.0f}%\n"
+            f"💨 *Vento:* {clima['vento']:.1f} km/h  |  🌧️ *Chuva (dia):* {clima['chuva_hoje']:.1f} mm\n\n"
+            
