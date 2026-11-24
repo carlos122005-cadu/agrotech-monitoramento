@@ -4,6 +4,7 @@ import numpy as np
 import rasterio
 from rasterio.windows import from_bounds
 from rasterio.warp import transform_bounds
+from rasterio.enums import Resampling
 from datetime import datetime, timezone, timedelta
 
 SB_URL = (os.getenv("SUPABASE_URL") or "").strip().rstrip("/")
@@ -46,10 +47,11 @@ def buscar_fazendas():
         return []
 
 
-def ler_cena(cena, bbox):
+def ler_cena_limpa(cena, bbox):
     assets = cena.get("assets", {})
     url_red = assets.get("red", {}).get("href")
     url_nir = assets.get("nir", {}).get("href")
+    url_scl = assets.get("scl", {}).get("href")
     if not url_red or not url_nir:
         return None
     with rasterio.open(url_red) as src_r:
@@ -58,8 +60,18 @@ def ler_cena(cena, bbox):
         red = src_r.read(1, window=win).astype("float32")
     with rasterio.open(url_nir) as src_n:
         nir = src_n.read(1, window=win).astype("float32")
+
+    valido = (red > 0) & (nir > 0)
+    if url_scl:
+        with rasterio.open(url_scl) as src_s:
+            win_s = from_bounds(*b_proj, src_s.transform)
+            scl = src_s.read(1, window=win_s, out_shape=red.shape, resampling=Resampling.nearest)
+            valido = valido & np.isin(scl, [4, 5])
+
+    if np.mean(valido) < 0.30:
+        return None
     soma = nir + red
-    ndvi = np.where(soma > 0, (nir - red) / soma, np.nan)
+    ndvi = np.where(valido & (soma > 0), (nir - red) / soma, np.nan)
     return round(float(np.nanmean(ndvi)), 2)
 
 
@@ -72,29 +84,33 @@ def calcular_ndvi_sentinel(lat, lon):
         "collections": ["sentinel-2-l2a"],
         "bbox": bbox,
         "datetime": f"{ini.strftime('%Y-%m-%dT00:00:00Z')}/{fim.strftime('%Y-%m-%dT23:59:59Z')}",
-        "query": {"eo:cloud_cover": {"lt": 45}},
-        "limit": 4
+        "query": {"eo:cloud_cover": {"lt": 85}},
+        "limit": 12
     }
     try:
         r = requests.post(stac_url, json=payload, timeout=25)
         feats = r.json().get("features", [])
-        if not feats:
-            return None, None, "Céu encoberto nas últimas semanas (aguardando abertura)."
-        atual = next(iter(feats))
-        dt_raw = atual["properties"].get("datetime", "")[:10]
-        dt_br = "/".join(reversed(dt_raw.split("-"))) if "-" in dt_raw else dt_raw
-        val_atual = ler_cena(atual, bbox)
-        val_ant = None
-        if len(feats) >= 2:
-            val_ant = ler_cena(list(feats).pop(1), bbox)
-        return val_atual, val_ant, dt_br
+        leituras = []
+        for cena in feats:
+            val = ler_cena_limpa(cena, bbox)
+            if val is not None:
+                dt_raw = cena["properties"].get("datetime", "")[:10]
+                dt_br = "/".join(reversed(dt_raw.split("-"))) if "-" in dt_raw else dt_raw
+                leituras.append((val, dt_br))
+                if len(leituras) == 2:
+                    break
+        if not leituras:
+            return None, None, "Céu encoberto sobre a fazenda nas últimas semanas (aguardando abertura)."
+        atual_val, atual_dt = next(iter(leituras))
+        ant_val = list(leituras).pop(1)[0] if len(leituras) >= 2 else None
+        return atual_val, ant_val, atual_dt
     except Exception as e:
         return None, None, f"Falha satélite: {str(e)[:50]}"
 
 
 def montar_diagnostico(ndvi, ant):
     if ndvi is None:
-        return "☁️ *Situação:* Nuvens sobre a região impediram a foto limpa do satélite esta semana."
+        return "☁️ *Situação:* Nuvens exatamente sobre a propriedade impediram a leitura limpa."
     nota = max(0.0, min(10.0, round(ndvi * 10, 1)))
     tend = ""
     if ant is not None:
@@ -106,15 +122,15 @@ def montar_diagnostico(ndvi, ant):
         else:
             tend = "➡️ *Tendência:* Estável em relação à última leitura\n"
 
-    if ndvi >= 0.60:
+    if ndvi >= 0.55:
         st = "🟢 *Pasto Verde e Cheio (Excelente)*"
         acao = "Boa oferta de capim para o rebanho. Mantenha o rodízio normal dos piquetes."
-    elif ndvi >= 0.40:
+    elif ndvi >= 0.38:
         st = "🟡 *Pasto Médio (Atenção)*"
-        acao = "Capim começando a perder força. Vale observar a lotação e planejar adubação ou descanso do piquete."
+        acao = "Capim com vigor moderado. Observe a lotação e planeje descanso ou adubação."
     else:
         st = "🔴 *Pasto Seco / Ralo (Alerta)*"
-        acao = "Pouca folha verde disponível. Recomendado aliviar o pasto, dar descanso ao piquete ou reforçar o cocho (silagem/ração)."
+        acao = "Pouca folha verde disponível. Recomendado aliviar o pasto, dar descanso ao piquete ou reforçar o cocho."
 
     return f"🌱 *Nota do Pasto:* *{nota:.1f} / 10* (Índice {ndvi:.2f})\n{tend}{st}\n💡 *Na prática:* {acao}"
 
@@ -132,7 +148,7 @@ def principal():
     for fz in faz:
         ndvi, ant, info = calcular_ndvi_sentinel(fz["lat"], fz["lon"])
         corpo = montar_diagnostico(ndvi, ant)
-        cab_foto = f"📸 *Última foto limpa:* {info}\n\n" if ndvi is not None else f"{info}\n\n"
+        cab_foto = f"📸 *Última foto sem nuvem:* {info}\n\n" if ndvi is not None else f"{info}\n\n"
         msg = (
             f"🛰️ *RAIO-X DO PASTO — {fz['nome'].upper()}*\n"
             f"Relatório Semanal • {agora.strftime('%d/%m/%Y')}\n\n"
