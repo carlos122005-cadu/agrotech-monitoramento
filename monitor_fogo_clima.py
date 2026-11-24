@@ -5,9 +5,21 @@ import pandas as pd
 from io import StringIO
 from datetime import datetime, timezone, timedelta
 
-NASA_FIRMS_KEY = os.getenv("NASA_FIRMS_KEY", "").strip()
-WHATSAPP_TELEFONE = os.getenv("WHATSAPP_TELEFONE", "").strip()
-WHATSAPP_APIKEY = (os.getenv("WHATSAPP_API_KEY") or os.getenv("WHATSAPP_APIKEY") or "").strip()
+NASA_FIRMS_KEY = (os.getenv("NASA_FIRMS_KEY") or os.getenv("FIRMS_MAP_KEY") or "").strip()
+WHATSAPP_TELEFONE = (
+    os.getenv("WHATSAPP_TELEFONE")
+    or os.getenv("WHATSAPP_PHONE")
+    or os.getenv("CALLMEBOT_PHONE")
+    or os.getenv("TELEFONE_WHATSAPP")
+    or ""
+).strip()
+WHATSAPP_APIKEY = (
+    os.getenv("WHATSAPP_API_KEY")
+    or os.getenv("WHATSAPP_APIKEY")
+    or os.getenv("CALLMEBOT_APIKEY")
+    or os.getenv("APIKEY_WHATSAPP")
+    or ""
+).strip()
 
 LATITUDE = float(os.getenv("LATITUDE", "-22.0286"))
 LONGITUDE = float(os.getenv("LONGITUDE", "-42.3611"))
@@ -15,8 +27,8 @@ RAIO_KM = float(os.getenv("RAIO_KM", "15.0"))
 NOME_FAZENDA = os.getenv("NOME_FAZENDA", "Fazenda Piloto - Cordeiro/RJ")
 
 
-def montar_url(*partes):
-    return "https://" + "/".join(p.strip("/") for p in partes)
+def montar_url(dominio, caminho):
+    return "https:" + "//" + dominio + "/" + caminho
 
 
 def calcular_distancia_km(lat1, lon1, lat2, lon2):
@@ -48,7 +60,7 @@ def avaliar_rebanho(temp, umid):
 
 
 def consultar_clima():
-    url = montar_url("://open-meteo.com", "v1", "forecast")
+    url = montar_url("://open-meteo.com", "v1/forecast")
     params = {
         "latitude": LATITUDE,
         "longitude": LONGITUDE,
@@ -106,7 +118,7 @@ def verificar_focos(chuva_mm=0.0):
         print("NASA_FIRMS_KEY ausente")
         return []
     area = f"{LONGITUDE - 1.0},{LATITUDE - 1.0},{LONGITUDE + 1.0},{LATITUDE + 1.0}"
-    url = montar_url("firms.modaps.eosdis.nasa.gov", "api", "area", "csv", NASA_FIRMS_KEY, "VIIRS_SNPP_NRT", area, "1")
+    url = montar_url("firms.modaps.eosdis.nasa.gov", f"api/area/csv/{NASA_FIRMS_KEY}/VIIRS_SNPP_NRT/{area}/1")
     try:
         r = requests.get(url, timeout=25)
         if r.status_code != 200:
@@ -185,4 +197,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-            
+    
