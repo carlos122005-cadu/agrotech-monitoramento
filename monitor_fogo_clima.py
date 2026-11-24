@@ -1,201 +1,187 @@
 import os
-import math
 import requests
 import pandas as pd
 from io import StringIO
 from datetime import datetime, timezone, timedelta
 
-NASA_FIRMS_KEY = (os.getenv("NASA_FIRMS_KEY") or os.getenv("FIRMS_MAP_KEY") or "").strip()
-WHATSAPP_TELEFONE = (
-    os.getenv("WHATSAPP_TELEFONE")
-    or os.getenv("WHATSAPP_PHONE")
-    or os.getenv("CALLMEBOT_PHONE")
-    or os.getenv("TELEFONE_WHATSAPP")
-    or ""
-).strip()
-WHATSAPP_APIKEY = (
-    os.getenv("WHATSAPP_API_KEY")
-    or os.getenv("WHATSAPP_APIKEY")
-    or os.getenv("CALLMEBOT_APIKEY")
-    or os.getenv("APIKEY_WHATSAPP")
-    or ""
-).strip()
+# =====================================================================
+# CONFIGURAÇÕES (Nomes exatos das suas Secrets)
+# =====================================================================
+LATITUDE = float((os.getenv("FAZENDA_LAT") or "-22.0286").strip().replace(",", "."))
+LONGITUDE = float((os.getenv("FAZENDA_LON") or "-42.3611").strip().replace(",", "."))
+RAIO_KM = float((os.getenv("RAIO_ALERTA_KM") or "15.0").strip().replace(",", "."))
 
-LATITUDE = float(os.getenv("LATITUDE", "-22.0286"))
-LONGITUDE = float(os.getenv("LONGITUDE", "-42.3611"))
-RAIO_KM = float(os.getenv("RAIO_KM", "15.0"))
-NOME_FAZENDA = os.getenv("NOME_FAZENDA", "Fazenda Piloto - Cordeiro/RJ")
+_raw_nasa = (os.getenv("NASA_FIRMS_KEY") or "").strip()
+NASA_FIRMS_KEY = [p for p in _raw_nasa.split("/") if len(p) == 32][-1] if "/" in _raw_nasa else _raw_nasa.lstrip(":")
+
+WHATSAPP_PHONE = (os.getenv("WHATSAPP_PHONE") or "").strip()
+WHATSAPP_APIKEY = (os.getenv("WHATSAPP_APIKEY") or "").strip()
 
 
-def montar_url(dominio, caminho):
-    barra = chr(47)
-    return "".join(["https:", barra, barra, dominio.strip(), barra, caminho.strip().lstrip(barra)])
+def criar_link(partes_dominio, *pedacos):
+    barra = "/"
+    dominio = ".".join(partes_dominio)
+    return "https:" + barra + barra + dominio + barra + barra.join(pedacos)
 
 
-def calcular_distancia_km(lat1, lon1, lat2, lon2):
-    r = 6371.0
-    p1, p2 = math.radians(lat1), math.radians(lat2)
-    dp = math.radians(lat2 - lat1)
-    dl = math.radians(lon2 - lon1)
-    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
-    return 2 * r * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+def enviar_alerta_whatsapp(mensagem: str):
+    if not WHATSAPP_PHONE or not WHATSAPP_APIKEY:
+        print("⚠️ Credenciais do WhatsApp não configuradas. Mensagem apenas no log:")
+        print(mensagem)
+        return
 
-
-def avaliar_pulverizacao(temp, umid, vento, prob_chuva):
-    if prob_chuva >= 50 or vento > 15 or umid < 45 or temp > 32:
-        return "🔴 NÃO APLICAR (Risco de deriva, evaporação ou lavagem)", 10
-    if 10 <= vento <= 15 or 45 <= umid < 55 or 28 < temp <= 32 or vento < 3:
-        return "🟡 CAUTELA (Atenção ao vento/umidade; preferir horário ameno)", 60
-    return "🟢 IDEAL (Condições ótimas para pulverização e adubação)", 100
-
-
-def avaliar_rebanho(temp, umid):
-    itu = 0.8 * temp + (umid / 100.0) * (temp - 14.4) + 46.4
-    if itu >= 84:
-        return "🚨 ALERTA CRÍTICO DE CALOR: Garantir sombra imediata, água fresca e NÃO movimentar lotes."
-    if itu >= 78:
-        return "🟠 DESCONFORTO TÉRMICO: Manter rebanho em piquetes com sombra e evitar curral nas horas quentes."
-    if itu >= 72:
-        return "🟡 ATENÇÃO LEVE: Manter bebedouros cheios e fazer manejo de curral no início da manhã."
-    return "🟢 CONFORTO IDEAL: Clima favorável para o rebanho e rotina normal de manejo."
-
-
-def consultar_clima():
-    url = montar_url("://open-meteo.com", "v1/forecast")
+    url = criar_link(["api", "callmebot", "com"], "whatsapp.php")
     params = {
-        "latitude": LATITUDE,
-        "longitude": LONGITUDE,
-        "current": "temperature_2m,relative_humidity_2m,wind_speed_10m",
-        "hourly": "temperature_2m,relative_humidity_2m,precipitation_probability,wind_speed_10m",
-        "daily": "precipitation_sum,temperature_2m_min",
-        "timezone": "America/Sao_Paulo",
-        "forecast_days": 2,
+        "phone": WHATSAPP_PHONE,
+        "text": mensagem,
+        "apikey": WHATSAPP_APIKEY
     }
     try:
-        r = requests.get(url, params=params, timeout=20)
-        if r.status_code != 200:
-            print(f"Erro Open-Meteo: {r.status_code}")
-            return None
-        d = r.json()
-        atual, hourly, daily = d["current"], d["hourly"], d["daily"]
-        temp = float(atual["temperature_2m"])
-        umid = float(atual["relative_humidity_2m"])
-        vento = float(atual["wind_speed_10m"])
-        chuva_hoje = float(daily["precipitation_sum"][0])
-        temp_min = float(daily["temperature_2m_min"][0])
-
-        status_pulv, _ = avaliar_pulverizacao(temp, umid, vento, 0)
-        melhor_hora, melhor_score = "Sem janela ideal nas próximas 24h", 0
-        for i in range(min(24, len(hourly["time"]))):
-            ht = float(hourly["temperature_2m"][i])
-            hu = float(hourly["relative_humidity_2m"][i])
-            hv = float(hourly["wind_speed_10m"][i])
-            hp = float(hourly["precipitation_probability"][i] or 0)
-            _, score = avaliar_pulverizacao(ht, hu, hv, hp)
-            if score > melhor_score:
-                melhor_score = score
-                hf = hourly["time"][i].split("T")[1]
-                melhor_hora = f"{hf} ({ht:.0f}°C | Vento {hv:.0f} km/h | Umid. {hu:.0f}%)"
-
-        return {
-            "temp": temp,
-            "umid": umid,
-            "vento": vento,
-            "chuva_hoje": chuva_hoje,
-            "status_pulv": status_pulv,
-            "melhor_janela": melhor_hora,
-            "conforto_gado": avaliar_rebanho(temp, umid),
-            "risco_30": (temp >= 30.0 and umid <= 30.0 and vento >= 30.0),
-            "risco_geada": (temp_min <= 3.0),
-            "temp_min": temp_min,
-        }
+        resp = requests.get(url, params=params, timeout=15)
+        if resp.status_code == 200:
+            print("✅ Alerta enviado com sucesso no WhatsApp!")
+        else:
+            print(f"❌ Erro ao enviar WhatsApp: {resp.status_code} - {resp.text}")
     except Exception as e:
-        print(f"Erro clima: {e}")
-        return None
+        print(f"❌ Falha de conexão com API do WhatsApp: {e}")
 
 
-def verificar_focos(chuva_mm=0.0):
-    if not NASA_FIRMS_KEY:
-        print("NASA_FIRMS_KEY ausente")
-        return []
-    area = f"{LONGITUDE - 1.0},{LATITUDE - 1.0},{LONGITUDE + 1.0},{LATITUDE + 1.0}"
-    url = montar_url("firms.modaps.eosdis.nasa.gov", f"api/area/csv/{NASA_FIRMS_KEY}/VIIRS_SNPP_NRT/{area}/1")
+def verificar_clima():
+    base_clima = criar_link(["api", "open-meteo", "com"], "v1", "forecast")
+    url = (
+        f"{base_clima}"
+        f"?latitude={LATITUDE}&longitude={LONGITUDE}"
+        f"&current=temperature_2m,relative_humidity_2m,wind_speed_10m,precipitation"
+        f"&timezone=America/Sao_Paulo"
+    )
     try:
-        r = requests.get(url, timeout=25)
-        if r.status_code != 200:
-            print(f"Erro NASA: {r.status_code}")
+        resp = requests.get(url, headers={"User-Agent": "VectorXAgro/1.0"}, timeout=20)
+        if resp.status_code != 200 or not resp.text.strip():
+            print(f"⚠️ Resposta inválida Open-Meteo (Status {resp.status_code}): {resp.text[:150]}")
+            return [], "Dados climáticos indisponíveis no momento."
+
+        dados = resp.json()
+        atual = dados.get("current", {})
+        temp = float(atual.get("temperature_2m", 0))
+        umid = float(atual.get("relative_humidity_2m", 0))
+        vento = float(atual.get("wind_speed_10m", 0))
+        chuva = float(atual.get("precipitation", 0))
+
+        alertas_clima = []
+        if temp >= 30 and umid <= 30 and vento >= 30:
+            alertas_clima.append("🚨 *RISCO EXTREMO DE INCÊNDIO (Regra 30-30-30 atingida!)*")
+        elif umid < 25:
+            alertas_clima.append("⚠️ *Umidade relativa crítica (< 25%)*")
+
+        if vento > 40:
+            alertas_clima.append(f"💨 *Rajadas de vento fortes ({vento} km/h)*")
+
+        # Pulverização e Adubação
+        if chuva > 0.2 or vento > 15 or umid < 45 or temp > 32:
+            pulv = "🔴 *Pulverização/Adubação:* Não aplicar agora"
+        elif vento >= 10 or umid < 55 or temp > 28:
+            pulv = "🟡 *Pulverização/Adubação:* Aplicar com cautela"
+        else:
+            pulv = "🟢 *Pulverização/Adubação:* Janela ideal agora"
+
+        # Conforto do Rebanho (sem siglas técnicas)
+        itu = 0.8 * temp + (umid / 100.0) * (temp - 14.4) + 46.4
+        if itu >= 84:
+            gado = "🚨 *Rebanho:* Calor crítico! Sombra, água e zero manejo."
+        elif itu >= 78:
+            gado = "🟠 *Rebanho:* Desconforto térmico. Manter na sombra e evitar curral."
+        elif itu >= 72:
+            gado = "🟡 *Rebanho:* Atenção leve. Preferir manejo no início da manhã."
+        else:
+            gado = "🟢 *Rebanho:* Conforto térmico ideal."
+
+        resumo = (
+            f"🌡️ Temp: {temp}°C | 💧 Umid: {umid}%\n"
+            f"💨 Vento: {vento} km/h | 🌧️ Chuva: {chuva} mm\n\n"
+            f"{pulv}\n{gado}"
+        )
+        return alertas_clima, resumo
+    except Exception as e:
+        print(f"Erro ao consultar clima: {e}")
+        return [], "Dados climáticos indisponíveis no momento."
+
+
+def verificar_focos_calor():
+    if not NASA_FIRMS_KEY:
+        print("⚠️ NASA_FIRMS_KEY não configurada. Pulando checagem de satélite.")
+        return []
+
+    delta = RAIO_KM / 111.0
+    area = f"{LONGITUDE - delta:.4f},{LATITUDE - delta:.4f},{LONGITUDE + delta:.4f},{LATITUDE + delta:.4f}"
+    url = criar_link(["firms", "modaps", "eosdis", "nasa", "gov"], "api", "area", "csv", NASA_FIRMS_KEY, "VIIRS_SNPP_NRT", area, "1")
+
+    try:
+        resp = requests.get(url, headers={"User-Agent": "VectorXAgro/1.0"}, timeout=25)
+        if resp.status_code != 200:
+            print(f"⚠️ Erro HTTP NASA FIRMS (Status {resp.status_code}): {resp.text[:150]}")
             return []
-        df = pd.read_csv(StringIO(r.text))
+
+        df = pd.read_csv(StringIO(resp.text))
         if df.empty:
+            print("🛰️ Satélite NASA FIRMS consultado com sucesso: 0 focos na área.")
             return []
+
         focos = []
         for _, row in df.iterrows():
             conf = str(row.get("confidence", "")).lower()
             frp = float(row.get("frp", 0.0))
-            if conf == "l" or frp < 2.0 or chuva_mm >= 10.0:
+            if conf == "l" or frp < 2.0:
                 continue
-            dist = calcular_distancia_km(LATITUDE, LONGITUDE, float(row["latitude"]), float(row["longitude"]))
-            if dist <= RAIO_KM:
-                focos.append({"lat": float(row["latitude"]), "lon": float(row["longitude"]), "dist": round(dist, 2)})
-        focos.sort(key=lambda x: x["dist"])
+            focos.append({
+                "lat": row["latitude"],
+                "lon": row["longitude"],
+                "brilho": row["bright_ti4"],
+                "confianca": row["confidence"],
+                "hora_utc": row["acq_time"]
+            })
         return focos
     except Exception as e:
-        print(f"Erro NASA: {e}")
+        print(f"Erro ao consultar NASA FIRMS: {e}")
         return []
 
 
-def enviar_whatsapp(texto):
-    if not WHATSAPP_TELEFONE or not WHATSAPP_APIKEY:
-        print("WhatsApp sem credenciais:\n" + texto)
-        return
-    url = montar_url("://callmebot.com", "whatsapp.php")
-    try:
-        r = requests.get(url, params={"phone": WHATSAPP_TELEFONE, "text": texto, "apikey": WHATSAPP_APIKEY}, timeout=20)
-        print(f"Status WhatsApp: {r.status_code}")
-    except Exception as e:
-        print(f"Erro WhatsApp: {e}")
+def executar_sentinela():
+    fuso_brt = timezone(timedelta(hours=-3))
+    agora_brt = datetime.now(fuso_brt)
+    agora_str = agora_brt.strftime("%d/%m/%Y %H:%M (Brasília)")
+    evento = (os.getenv("GITHUB_EVENT_NAME") or "").strip()
 
+    print(f"🛰️ Iniciando varredura VectorX Agro ({agora_str}) | Evento: {evento}...")
 
-def main():
-    agora = datetime.now(timezone(timedelta(hours=-3)))
-    data_str = agora.strftime("%d/%m/%Y às %H:%M (Brasília)")
-    evento = os.getenv("GITHUB_EVENT_NAME", "").strip()
-    print(f"VectorX Agro | {data_str} | Evento: {evento}")
+    alertas_clima, resumo_clima = verificar_clima()
+    focos = verificar_focos_calor()
 
-    clima = consultar_clima()
-    focos = verificar_focos(clima["chuva_hoje"] if clima else 0.0)
+    mensagens = []
 
     if focos:
-        f0 = focos[0]
-        link = montar_url("://google.com", "maps") + f"?q={f0['lat']},{f0['lon']}"
-        bloco_fogo = f"🚨 *ALERTA DE FOCO DE CALOR!*\n• Total ({RAIO_KM:.0f} km): {len(focos)}\n• Mais próximo: *{f0['dist']} km*\n• Mapa: {link}"
-    elif clima and clima["risco_30"]:
-        bloco_fogo = "🔥 *RISCO EXTREMO DE INCÊNDIO (30-30-30)*\n• Calor >30°C, umidade <30% e vento >30 km/h."
-    else:
-        bloco_fogo = f"🛡️ *Área Segura:* Nenhum foco de calor num raio de {RAIO_KM:.0f} km."
+        mensagens.append(f"🔥 *ALERTA DE QUEIMADA DETECTADO!* ({len(focos)} foco(s) no raio de {RAIO_KM} km)")
+        base_mapa = criar_link(["www", "google", "com"], "maps")
+        for i, f in enumerate(focos[:5], 1):
+            link_maps = f"{base_mapa}?q={f['lat']},{f['lon']}"
+            mensagens.append(f"• Foco {i} (Confiança: {f['confianca']}): {link_maps}")
 
-    if clima and clima["risco_geada"]:
-        bloco_fogo += f"\n❄️ *ALERTA DE GEADA:* Mínima prevista de {clima['temp_min']:.1f}°C!"
+    if alertas_clima:
+        mensagens.extend(alertas_clima)
 
-    if clima:
-        bloco_clima = (
-            f"🌡️ *Temp:* {clima['temp']:.1f}°C | 💧 *Umid:* {clima['umid']:.0f}%\n"
-            f"💨 *Vento:* {clima['vento']:.1f} km/h | 🌧️ *Chuva:* {clima['chuva_hoje']:.1f} mm\n\n"
-            f"🚜 *Adubação e Pulverização:*\n{clima['status_pulv']}\n"
-            f"⏰ *Melhor Janela (24h):* {clima['melhor_janela']}\n\n"
-            f"🐄 *Manejo do Rebanho:*\n{clima['conforto_gado']}"
+    if mensagens or agora_brt.hour == 6 or evento == "workflow_dispatch":
+        cabecalho_status = "\n".join(mensagens) if mensagens else f"🛡️ *Área Segura:* Nenhum foco de calor no raio de {RAIO_KM} km."
+        texto_final = (
+            f"🚜 *VECTORX AGRO - SENTINELA 24/7*\n"
+            f"🕒 {agora_str}\n\n"
+            f"{cabecalho_status}\n\n"
+            f"📊 *Condições Atuais & Manejo:*\n{resumo_clima}"
         )
+        enviar_alerta_whatsapp(texto_final)
     else:
-        bloco_clima = "⚠️ *Clima:* Dados temporariamente indisponíveis."
-
-    msg = f"🌱 *VECTORX AGRO — {NOME_FAZENDA.upper()}*\n📅 {data_str}\n\n{bloco_fogo}\n\n{bloco_clima}"
-
-    if focos or (clima and (clima["risco_30"] or clima["risco_geada"])) or agora.hour == 6 or evento == "workflow_dispatch":
-        enviar_whatsapp(msg)
-    else:
-        print("Zero Spam: fora da rotina das 06h e sem emergência.")
+        print("✅ Nenhum foco de calor ou risco climático crítico detectado (Zero Spam).")
+        print(resumo_clima)
 
 
 if __name__ == "__main__":
-    main()
-    
+    executar_sentinela()
+            
