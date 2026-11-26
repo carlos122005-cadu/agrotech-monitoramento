@@ -15,14 +15,15 @@ F_RAIO = float((os.getenv("RAIO_ALERTA_KM") or "15.0").strip().replace(",", ".")
 _nasa = (os.getenv("NASA_FIRMS_KEY") or "").strip()
 NASA_KEY = [p for p in _nasa.split("/") if len(p) == 32][-1] if "/" in _nasa else _nasa.lstrip("/")
 F_PHONE = (os.getenv("WHATSAPP_PHONE") or "").strip()
-F_APIKEY = (os.getenv("WHATSAPP_APIKEY") or "").strip()
 SB_URL = (os.getenv("SUPABASE_URL") or "").strip().rstrip("/")
 SB_KEY = (os.getenv("SUPABASE_KEY") or "").strip()
 
+EVO_URL = "https://onrender.com"
+EVO_HEADERS = {"apikey": "agro2026cordeiro", "Content-Type": "application/json"}
+
 
 def link(dom, pedacos):
-    b = "/"
-    return "https:" + b + b + ".".join(dom) + b + b.join(pedacos)
+    return "https://" + ".".join(dom) + "/" + "/".join(pedacos)
 
 
 def h_sb():
@@ -35,7 +36,6 @@ def buscar_fazendas():
     try:
         r = requests.post(f"{SB_URL}/rest/v1/rpc/listar_fazendas_ativas", headers=h_sb(), json={}, timeout=15)
         if r.status_code != 200:
-            print(f"⚠️ Erro Supabase ({r.status_code}): {r.text[:120]}")
             return []
         fazs = []
         for item in r.json():
@@ -49,12 +49,10 @@ def buscar_fazendas():
                 "lon": float(item.get("lon") or F_LON),
                 "raio": float(d.get("raio_km") or F_RAIO),
                 "tel": str(d.get("whatsapp") or d.get("telefone") or F_PHONE).strip(),
-                "chave": str(d.get("apikey_whatsapp") or d.get("chave_de_API") or F_APIKEY).strip(),
                 "geom": geom_raw,
             })
         return fazs
-    except Exception as e:
-        print(f"⚠️ Falha Supabase: {e}")
+    except Exception:
         return []
 
 
@@ -62,10 +60,7 @@ def publicar_mapa(fz, focos, iv, t_atual, u_atual):
     if not SB_URL or not SB_KEY or not focos:
         return None
     try:
-        if isinstance(fz.get("geom"), dict):
-            poly = shape(fz["geom"])
-        else:
-            poly = Point(fz["lon"], fz["lat"]).buffer(0.015)
+        poly = shape(fz["geom"]) if isinstance(fz.get("geom"), dict) else Point(fz["lon"], fz["lat"]).buffer(0.015)
         gdf = gpd.GeoDataFrame(geometry=[poly], crs="EPSG:4326")
         focos_fmt = [{"latitude": fc["lat"], "longitude": fc["lon"]} for fc in focos[:5]]
         arq_local = f"mapa_{int(time.time())}.png"
@@ -80,10 +75,11 @@ def publicar_mapa(fz, focos, iv, t_atual, u_atual):
             up = requests.post(u_up, headers=headers_up, data=f_img.read(), timeout=25)
         if up.status_code in (200, 201):
             return f"{SB_URL}/storage/v1/object/public/mapas/{nome_remoto}"
-        print(f"⚠️ Erro upload mapa ({up.status_code}): {up.text[:100]}")
     except Exception as e:
-        print(f"⚠️ Falha ao gerar mapa: {e}")
+        print(f"⚠️ Falha mapa: {e}")
     return None
+
+
 def ja_alertado(fid, tipo):
     if not SB_URL or not SB_KEY or not fid:
         return False
@@ -111,16 +107,14 @@ def salvar_alerta(fid, tipo):
 def dist_km(lat1, lon1, lat2, lon2):
     r = 6371.0
     p1, p2 = math.radians(lat1), math.radians(lat2)
-    dp = math.radians(lat2 - lat1)
-    dl = math.radians(lon2 - lon1)
+    dp, dl = math.radians(lat2 - lat1), math.radians(lon2 - lon1)
     a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
     return r * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
 def dir_vento(deg):
-    prop = (deg + 180) % 360
     dirs = ["Norte", "Nordeste", "Leste", "Sudeste", "Sul", "Sudoeste", "Oeste", "Noroeste"]
-    return dirs[int((prop + 22.5) // 45) % 8]
+    return dirs[int((((deg + 180) % 360) + 22.5) // 45) % 8]
 
 
 def eval_pulv(t, u, v, c, p):
@@ -142,18 +136,26 @@ def eval_gado(t, u):
     return "🟢 *Rebanho:* Conforto térmico ideal."
 
 
-def enviar_wpp(tel, chave, msg):
-    if not tel or not chave:
-        print(f"⚠️ Sem credenciais WPP:\n{msg}")
+def enviar_wpp(tel, msg, url_img=None):
+    num = "".join(filter(str.isdigit, str(tel)))
+    if num and not num.startswith("55"):
+        num = "55" + num
+    if not num:
+        print(f"⚠️ Sem telefone:\n{msg}")
         return False
     try:
-        r = requests.get(
-            link(["api", "callmebot", "com"], ["whatsapp.php"]),
-            params={"phone": tel, "text": msg, "apikey": chave},
-            timeout=25
-        )
-        print("📲 WhatsApp enviado!" if r.status_code == 200 else f"❌ Erro WPP: {r.status_code}")
-        return r.status_code == 200
+        if url_img:
+            ep = f"{EVO_URL}/message/sendMedia/Agrotech"
+            dados = {"number": num, "mediatype": "image", "mimetype": "image/png", "caption": msg, "media": url_img, "fileName": "mapa.png", "delay": 2000}
+        else:
+            ep = f"{EVO_URL}/message/sendText/Agrotech"
+            dados = {"number": num, "text": msg, "delay": 2000}
+        r = requests.post(ep, json=dados, headers=EVO_HEADERS, timeout=60)
+        ok = r.status_code in (200, 201)
+        print("📲 WhatsApp enviado!" if ok else f"❌ Erro WPP ({r.status_code}): {r.text[:120]}")
+        if ok:
+            time.sleep(5)
+        return ok
     except Exception as e:
         print(f"❌ Falha WPP: {e}")
         return False
@@ -171,51 +173,37 @@ def ver_clima(lat, lon, agora):
         except Exception:
             time.sleep(2)
     if not dados:
-        try:
-            u_met = f"{link(['api', 'met', 'no'], ['weatherapi', 'locationforecast', '2.0', 'compact'])}?lat={lat:.4f}&lon={lon:.4f}"
-            fb = requests.get(u_met, headers={"User-Agent": "VectorXAgro/1.0 github.com"}, timeout=20).json()
-            serie = fb["properties"]["timeseries"]
-            atual = next(iter(serie))["data"]["instant"]["details"]
-            t, u_ar = float(atual.get("air_temperature", 0)), float(atual.get("relative_humidity", 0))
-            v, dv = float(atual.get("wind_speed", 0)) * 3.6, float(atual.get("wind_from_direction", 0))
-            ch = float(next(iter(serie))["data"].get("next_1_hours", {}).get("details", {}).get("precipitation_amount", 0))
-            destino = dir_vento(dv)
-            st_p, _ = eval_pulv(t, u_ar, v, ch, 20.0)
-            res = f"🌡️ Temp: {t:.1f}°C | 💧 Umid: {u_ar:.0f}% (Satélite MET)\n💨 Vento: {v:.1f}km/h (indo p/ {destino})\n🌧️ Chuva: {ch:.1f}mm\n🚜 *Pulverização/Adubo:* {st_p}\n{eval_gado(t, u_ar)}"
-            return [], res, {"vel": v, "dest": destino, "deg": dv, "t": t, "u": u_ar}
-        except Exception:
-            return [], "Dados climáticos indisponíveis no momento.", None
+        return [], "Dados climáticos indisponíveis no momento.", None
 
-    em, hr = dados.get("current", {}), dados.get("hourly", {})
-    t, u_ar, v = float(em.get("temperature_2m", 0)), float(em.get("relative_humidity_2m", 0)), float(em.get("wind_speed_10m", 0))
-    dv, ch = float(em.get("wind_direction_10m", 0)), float(em.get("precipitation", 0))
+    hr, dd = dados.get("current", {}), dados.get("hourly", {})
+    t, u_ar, v = float(hr.get("temperature_2m", 0)), float(hr.get("relative_humidity_2m", 0)), float(hr.get("wind_speed_10m", 0))
+    dv, ch = float(hr.get("wind_direction_10m", 0)), float(hr.get("precipitation", 0))
     hs = agora.strftime("%Y-%m-%dT%H:00")
-    th = hr.get("time", [])
+    th = dd.get("time", [])
     idx = th.index(hs) if hs in th else 0
-    ph = hr.get("precipitation_probability", [])
+    ph = dd.get("precipitation_probability", [])
     pa = float(ph[idx]) if 0 <= idx < len(ph) else 0.0
 
     alertas = []
     if t >= 30 and u_ar <= 30 and v >= 30:
         alertas.append("🔥 *RISCO EXTREMO DE INCÊNDIO (Regra 30-30-30 atingida!)*")
-    elif u_ar < 25:
+    if u_ar < 25:
         alertas.append("⚠️ *Umidade relativa crítica (< 25%)*")
     if v > 40:
         alertas.append(f"💨 *Rajadas de vento fortes ({v:.0f}km/h)*")
 
     st_p, _ = eval_pulv(t, u_ar, v, ch, pa)
-    ms_ph = "Sem janela ideal nas próximas 24h"
+    mej_ph = "Sem janela ideal nas próximas 24h"
     for i in range(idx + 1, min(idx + 25, len(th))):
-        ht, hu, hv = float(hr["temperature_2m"][i]), float(hr["relative_humidity_2m"][i]), float(hr["wind_speed_10m"][i])
-        hc, hp = float(hr["precipitation"][i] or 0), float(hr["precipitation_probability"][i] or 0)
-        _, sc = eval_pulv(ht, hu, hv, hc, hp)
-        if sc >= 80:
+        ht, hu, hv = float(dd["temperature_2m"][i]), float(dd["relative_humidity_2m"][i]), float(dd["wind_speed_10m"][i])
+        hc, hp = float(dd["precipitation"][i] or 0), float(dd["precipitation_probability"][i] or 0)
+        if eval_pulv(ht, hu, hv, hc, hp)[1] >= 80:
             dia_lbl = "Hoje" if th[i].startswith(agora.strftime("%Y-%m-%d")) else "Amanhã"
-            ms_ph = f"{dia_lbl} às {th[i][-5:]} ({ht:.0f}°C | Vento:{hv:.0f}km/h | Umid:{hu:.0f}%)"
+            mej_ph = f"{dia_lbl} às {th[i][-5:]} ({ht:.0f}°C | Vento {hv:.0f}km/h | Umid {hu:.0f}%)"
             break
 
     destino = dir_vento(dv)
-    res = f"🌡️ Temp: {t:.1f}°C | 💧 Umid: {u_ar:.0f}%\n💨 Vento: {v:.1f}km/h (indo p/ {destino})\n🌧️ Chuva: {ch:.1f}mm (Chance: {pa:.0f}%)\n🚜 *Pulverização/Adubo:* {st_p}\n🕒 *Próx. janela boa:* {ms_ph}\n{eval_gado(t, u_ar)}"
+    res = f"🌡️ Temp: {t:.1f}°C | 💧 Umid: {u_ar:.0f}%\n💨 Vento: {v:.1f}km/h (indo p/ {destino})\n🌧️ Chuva: {ch:.1f}mm (Chance: {pa:.0f}%)\n🚜 *Pulverização:* {st_p}\n⏰ *Melhor janela:* {mej_ph}\n{eval_gado(t, u_ar)}"
     return alertas, res, {"vel": v, "dest": destino, "deg": dv, "t": t, "u": u_ar}
 
 
@@ -234,55 +222,3 @@ def baixar_focos(faz):
 
 def principal():
     agora = datetime.now(timezone(timedelta(hours=-3)))
-    astr = agora.strftime("%d/%m/%Y %H:%M (Brasília)")
-    ev = (os.getenv("GITHUB_EVENT_NAME") or "").strip()
-    print(f"🚀 Varredura VectorX Agro ({astr}) | Evento: {ev}")
-
-    faz = buscar_fazendas()
-    print(f"🏡 {len(faz)} fazenda(s) carregada(s) do Supabase." if faz else "🏡 Usando segredos alternativos.")
-    if not faz:
-        faz = [{"id": None, "nome": "Fazenda Piloto - Cordeiro/RJ", "lat": F_LAT, "lon": F_LON, "raio": F_RAIO, "tel": F_PHONE, "chave": F_APIKEY, "geom": None}]
-
-    df = baixar_focos(faz)
-    for fz in faz:
-        ac, rc, iv = ver_clima(fz["lat"], fz["lon"], agora)
-        focos = []
-        if not df.empty:
-            for _, linha in df.iterrows():
-                if str(linha.get("confidence", "")).lower() != "l" and float(linha.get("frp", 0)) >= 2.0:
-                    d = dist_km(fz["lat"], fz["lon"], float(linha["latitude"]), float(linha["longitude"]))
-                    if d <= fz["raio"]:
-                        focos.append({"lat": float(linha["latitude"]), "lon": float(linha["longitude"]), "d": round(d, 2)})
-        focos.sort(key=lambda x: x["d"])
-        mensagens, chave = [], None
-
-        if focos:
-            mp = next(iter(focos))
-            chave = f"FOGO_{round(mp['lat'], 2)}_{round(mp['lon'], 2)}"
-            mensagens.append(f"🔥 *ALERTA DE QUEIMADA DETECTADO!*\n• Mais próximo: a *{mp['d']}km* da propriedade.")
-            if iv:
-                mensagens.append(f"• Propagação do Vento: *{iv['vel']:.1f}km/h* afundando para *{iv['dest']}*")
-            url_mapa = publicar_mapa(fz, focos, iv, iv["t"] if iv else 0, iv["u"] if iv else 0)
-            if url_mapa:
-                mensagens.append(f"• 🗺️ *Mapa Tático Satélite:* {url_mapa}")
-            lm = link(["www", "google", "com"], ["maps"])
-            for i, fc in enumerate(focos[:3], 1):
-                mensagens.append(f"• Mapa Foco {i} ({fc['d']}km): {lm}?q={fc['lat']},{fc['lon']}")
-        if ac:
-            mensagens.extend(ac)
-            chave = chave or f"CLIMA_{agora.strftime('%Y%m%d')}"
-
-        if ev == "workflow_dispatch" or (agora.hour == 6 and agora.minute < 30):
-            cab = "\n".join(mensagens) if mensagens else f"🛡️ Área Segura: Nenhum foco de calor no raio de {fz['raio']}km."
-            enviar_wpp(fz["tel"], fz["chave"], f"🌾 *VECTORX AGRO — {fz['nome'].upper()}*\n{astr}\n\n{cab}\n\n{rc}")
-        elif mensagens:
-            if not ja_alertado(fz["id"], chave):
-                if enviar_wpp(fz["tel"], fz["chave"], f"🚨 *EMERGÊNCIA VECTORX AGRO — {fz['nome'].upper()}*\n{astr}\n\n" + "\n".join(mensagens) + f"\n\n{rc}"):
-                    salvar_alerta(fz["id"], chave)
-        else:
-            print(f"🛡️ {fz['nome']}: Área segura.")
-
-if __name__ == "__main__":
-    principal()
-# FIM_DO_CODIGO
-
